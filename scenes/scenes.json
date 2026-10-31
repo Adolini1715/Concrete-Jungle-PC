@@ -1,0 +1,27 @@
+{
+ "ch1-courtyard": {
+  "chapter": 1,
+  "desc": "After the door cutscene, gangsters in the courtyard",
+  "file": "ch1-courtyard.pcjs"
+ },
+ "ch1-doors": {
+  "chapter": 1,
+  "desc": "Thugs dead, walking to the doors (door cutscene next)",
+  "file": "ch1-doors.pcjs"
+ },
+ "ch1-fight": {
+  "chapter": 1,
+  "desc": "First gang fight, two thugs at (-4,15.4,-33)",
+  "file": "ch1-fight.pcjs"
+ },
+ "ch1-hallway": {
+  "chapter": 1,
+  "desc": "Courtyard cleared, a few steps from the hallway cutscene trigger",
+  "file": "ch1-hallway.pcjs"
+ },
+ "ch1-start": {
+  "chapter": 1,
+  "desc": "Midsummer Night's Massacre: control at the start, on the rooftop",
+  "file": "ch1-start.pcjs"
+ }
+}

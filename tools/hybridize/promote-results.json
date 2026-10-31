@@ -1,0 +1,1112 @@
+[
+ {
+  "va": "002C3D40",
+  "name": "EXAudioBase::EXAudioBase",
+  "unit": "EXAudioBase",
+  "size": 960,
+  "status": "FAIL",
+  "calls": 1,
+  "frame": 0,
+  "region": "crash/hang",
+  "detail": "no clean stop (rc=-9); alone to f3: no clean stop rc=-10",
+  "runs": "Aaaaaa"
+ },
+ {
+  "va": "00209270",
+  "name": "EXGeoFile::Update",
+  "unit": "EXGeoFile",
+  "size": 672,
+  "status": "PASS",
+  "calls": 951,
+  "runs": "Aaaa"
+ },
+ {
+  "va": "001D20F0",
+  "name": "EXPlacementItem::CalcMatrix",
+  "unit": "EXItem",
+  "size": 560,
+  "status": "PASS",
+  "calls": 70,
+  "runs": "Aaaa"
+ },
+ {
+  "va": "002CDF60",
+  "name": "EXAudioCodec::ReleaseEnvStereo",
+  "unit": "EXAudioCodec",
+  "size": 560,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "Aaaa"
+ },
+ {
+  "va": "00199F40",
+  "name": "XGamePad::LookupButton",
+  "unit": "XGamePad",
+  "size": 496,
+  "status": "PASS",
+  "calls": 68,
+  "runs": "Aaabaa"
+ },
+ {
+  "va": "0012D8F0",
+  "name": "GeoSectionItem::Update",
+  "unit": "GeoSectionManager",
+  "size": 416,
+  "status": "PASS",
+  "calls": 69,
+  "runs": "Aaaaab"
+ },
+ {
+  "va": "002582D0",
+  "name": "EXBaseWnd::CreateDbgMem",
+  "unit": "EXWndDebug",
+  "size": 400,
+  "status": "PASS",
+  "calls": 4,
+  "runs": "A"
+ },
+ {
+  "va": "00216070",
+  "name": "EXItemAnimatorQueue::Allocate",
+  "unit": "EXItemAnimator",
+  "size": 368,
+  "status": "PASS",
+  "calls": 15,
+  "runs": "Aaaaab"
+ },
+ {
+  "va": "00107520",
+  "name": "FEObjectScript::Play",
+  "unit": "FEScript",
+  "size": 352,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "A"
+ },
+ {
+  "va": "000DC860",
+  "name": "FELayoutScrollGrid::EnsureVisible",
+  "unit": "FELayout",
+  "size": 336,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "A"
+ },
+ {
+  "va": "00129270",
+  "name": "GameData::DataTransfer",
+  "unit": "GameData",
+  "size": 336,
+  "status": "PASS",
+  "calls": 150,
+  "runs": "A"
+ },
+ {
+  "va": "001ACB80",
+  "name": "EXStringArray::SetSize",
+  "unit": "EXString",
+  "size": 304,
+  "status": "FAIL",
+  "calls": 493,
+  "frame": 1,
+  "region": "data",
+  "detail": "001ACB80 call #1: same pre-state, different post/ret; DIVERGE; alone to f3: DIVERGE f=1 data",
+  "runs": "Aaab"
+ },
+ {
+  "va": "001AED60",
+  "name": "EXBaseSoundManager::CommandUpdate",
+  "unit": "EXSoundManager",
+  "size": 304,
+  "status": "PASS",
+  "calls": 190,
+  "runs": "A"
+ },
+ {
+  "va": "002BFF10",
+  "name": "EXAudioVoiceManager::EXAudioVoiceManager",
+  "unit": "EXAudioVoice",
+  "size": 304,
+  "status": "FAIL",
+  "calls": 1,
+  "frame": 0,
+  "region": "crash/hang",
+  "detail": "first differing logged call 001ABBE0 #16; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data",
+  "runs": "A"
+ },
+ {
+  "va": "001B9A10",
+  "name": "EXBaseApp::UpdateFrameRate",
+  "unit": "EXApp",
+  "size": 288,
+  "status": "PASS",
+  "calls": 150,
+  "runs": "A"
+ },
+ {
+  "va": "0027A640",
+  "name": "EXBoundsBox::Accumulate",
+  "unit": "EXBounds",
+  "size": 288,
+  "status": "PASS",
+  "calls": 35,
+  "runs": "A"
+ },
+ {
+  "va": "000F8F90",
+  "name": "FEObject::CalculateTextRect",
+  "unit": "FEObject",
+  "size": 272,
+  "status": "PASS",
+  "calls": 1047,
+  "runs": "A"
+ },
+ {
+  "va": "002CE720",
+  "name": "revmodel::mute",
+  "unit": "EXAudioDSP",
+  "size": 256,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "A"
+ },
+ {
+  "va": "000ADA40",
+  "name": "CFormation::CFormation",
+  "unit": "AIFormation",
+  "size": 240,
+  "status": "FAIL",
+  "calls": 1,
+  "frame": 0,
+  "region": "crash/hang",
+  "detail": "000ADA40 call #1: same pre-state, different post/ret; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data",
+  "runs": "A"
+ },
+ {
+  "va": "001B33A0",
+  "name": "EXItemAnimator_Script::AddItemThread",
+  "unit": "EXItemAnimator_Script",
+  "size": 240,
+  "status": "PASS",
+  "calls": 15,
+  "runs": "A"
+ },
+ {
+  "va": "002490D0",
+  "name": "EXDebugTree::SectionHandle",
+  "unit": "EXDebugTree",
+  "size": 240,
+  "status": "PASS",
+  "calls": 83,
+  "runs": "A"
+ },
+ {
+  "va": "00134F60",
+  "name": "XNavLocation::XNavLocation",
+  "unit": "NavMeshHdlr",
+  "size": 224,
+  "status": "PASS",
+  "calls": 11,
+  "runs": "A"
+ },
+ {
+  "va": "00271D30",
+  "name": "EXItemRender_Entity::Initialise",
+  "unit": "EXItemRender_Entity",
+  "size": 224,
+  "status": "PASS",
+  "calls": 15,
+  "runs": "A"
+ },
+ {
+  "va": "00285180",
+  "name": "XBFileManager::FileRead",
+  "unit": "XBFileManager",
+  "size": 224,
+  "status": "PASS",
+  "calls": 59,
+  "runs": "A"
+ },
+ {
+  "va": "00110220",
+  "name": "FEBaseWnd::FEBaseWnd",
+  "unit": "FEWnd",
+  "size": 208,
+  "status": "FAIL",
+  "calls": 3,
+  "frame": 0,
+  "region": "hang",
+  "detail": "hangs the boot (screen, rc=-10 stall kill), also in round 4; alone to f3: no clean stop rc=-10",
+  "runs": "screen"
+ },
+ {
+  "va": "001B9D70",
+  "name": "EXBaseGamePad::EXBaseGamePad",
+  "unit": "EXGamepad",
+  "size": 208,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "A"
+ },
+ {
+  "va": "0021E900",
+  "name": "EXGeoCommonArray_FindIndex",
+  "unit": "EXGeoCommon",
+  "size": 208,
+  "status": "PASS",
+  "calls": 2050,
+  "runs": "A"
+ },
+ {
+  "va": "0012A360",
+  "name": "LoadSoundBank",
+  "unit": "GameWnd",
+  "size": 192,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "A"
+ },
+ {
+  "va": "0013E120",
+  "name": "XNavRoute::XNavRoute",
+  "unit": "NavRoute",
+  "size": 192,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "A"
+ },
+ {
+  "va": "00173110",
+  "name": "FEText::Decompress",
+  "unit": "Text",
+  "size": 176,
+  "status": "PASS",
+  "calls": 45,
+  "runs": "A"
+ },
+ {
+  "va": "002163D0",
+  "name": "EXHistogram::Add",
+  "unit": "EXStats",
+  "size": 176,
+  "status": "PASS",
+  "calls": 300,
+  "runs": "A"
+ },
+ {
+  "va": "0024E0C0",
+  "name": "EXWnd::_DrawSprite2D",
+  "unit": "XBWndSprite",
+  "size": 176,
+  "status": "PASS",
+  "calls": 40,
+  "runs": "A"
+ },
+ {
+  "va": "0028CD00",
+  "name": "EXGeoEntity::CreateRGBAVertexBuffers",
+  "unit": "XBGeoEntity",
+  "size": 176,
+  "status": "PASS",
+  "calls": 112,
+  "runs": "A"
+ },
+ {
+  "va": "002BD590",
+  "name": "EXSfxCmd_Parser::ProcessCommands",
+  "unit": "EXSfxcmds",
+  "size": 176,
+  "status": "PASS",
+  "calls": 162,
+  "runs": "B"
+ },
+ {
+  "va": "002BD9E0",
+  "name": "EXAudio::psiAsyncReadFile",
+  "unit": "XBAudio",
+  "size": 176,
+  "status": "PASS",
+  "calls": 39,
+  "runs": "B"
+ },
+ {
+  "va": "000F7140",
+  "name": "FEListener::LastInputUpdate",
+  "unit": "FENavigator",
+  "size": 160,
+  "status": "PASS",
+  "calls": 150,
+  "runs": "B"
+ },
+ {
+  "va": "00205200",
+  "name": "EXItemEnvView::EXItemEnvView",
+  "unit": "EXItemEnv",
+  "size": 160,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "0023A530",
+  "name": "EXParticleSysMgr::EXParticleSysMgr",
+  "unit": "EXParticle",
+  "size": 160,
+  "status": "FAIL",
+  "calls": 4,
+  "frame": 0,
+  "region": "hang",
+  "detail": "hangs the boot (screen, rc=-10 stall kill), also in round 4; alone to f3: no clean stop rc=-10",
+  "runs": "screen"
+ },
+ {
+  "va": "00274DA0",
+  "name": "EXGDiData::Release",
+  "unit": "XBGeoDrawInfo",
+  "size": 160,
+  "status": "PASS",
+  "calls": 9,
+  "runs": "B"
+ },
+ {
+  "va": "00278FA0",
+  "name": "EXSoundManager::EXSoundManager",
+  "unit": "XBSoundManager",
+  "size": 160,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "002C7140",
+  "name": "AudioMixer::DecodeVoice",
+  "unit": "EXAudioMixer",
+  "size": 160,
+  "status": "PASS",
+  "calls": 10,
+  "runs": "B"
+ },
+ {
+  "va": "002C7A60",
+  "name": "AsyncFile::Init",
+  "unit": "EXFileManager",
+  "size": 160,
+  "status": "PASS",
+  "calls": 3,
+  "runs": "B"
+ },
+ {
+  "va": "002C8C20",
+  "name": "EXAudioMemory::Alloc",
+  "unit": "EXAudioMemory",
+  "size": 160,
+  "status": "PASS",
+  "calls": 3,
+  "runs": "B"
+ },
+ {
+  "va": "000AC8F0",
+  "name": "AIControl::AIControl",
+  "unit": "AIControl",
+  "size": 144,
+  "status": "FAIL",
+  "calls": 1,
+  "frame": 0,
+  "region": "crash/hang",
+  "detail": "000AC8F0 call #1: same pre-state, different post/ret; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data",
+  "runs": "A"
+ },
+ {
+  "va": "000E3B60",
+  "name": "FEMainMenu::SetState",
+  "unit": "FEMainMenu",
+  "size": 144,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "001B0C10",
+  "name": "EXItemAnimator_Entity::Initialise",
+  "unit": "EXItemAnimator_Entity",
+  "size": 128,
+  "status": "FAIL",
+  "calls": 15,
+  "frame": 9,
+  "region": "crash/hang",
+  "detail": "[HYB] blamed native 001B0C10; no clean stop (rc=-6); alone to f3: image f00002.bmp",
+  "runs": "B"
+ },
+ {
+  "va": "00222080",
+  "name": "EXFileSys::OnLoadFile",
+  "unit": "EXFileSys",
+  "size": 128,
+  "status": "PASS",
+  "calls": 5,
+  "runs": "B"
+ },
+ {
+  "va": "00248F50",
+  "name": "EXWatcher::EXWatcher",
+  "unit": "EXWatcher",
+  "size": 128,
+  "status": "FAIL",
+  "calls": 1,
+  "frame": 0,
+  "region": "crash/hang",
+  "detail": "00248F50 call #1: same pre-state, different post/ret; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data",
+  "runs": "A"
+ },
+ {
+  "va": "0024B020",
+  "name": "EXMenu::AddSubMenu",
+  "unit": "EXMenu",
+  "size": 128,
+  "status": "PASS",
+  "calls": 9,
+  "runs": "B"
+ },
+ {
+  "va": "00259B50",
+  "name": "EXFile::CreateMXFile",
+  "unit": "EXFile",
+  "size": 128,
+  "status": "PASS",
+  "calls": 10,
+  "runs": "B"
+ },
+ {
+  "va": "00021E70",
+  "name": "Actor::PreLoadInit",
+  "unit": "Actor",
+  "size": 112,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "Baa"
+ },
+ {
+  "va": "000E0360",
+  "name": "FELevelManager::LevelFromHash",
+  "unit": "FELevels",
+  "size": 112,
+  "status": "PASS",
+  "calls": 3,
+  "runs": "B"
+ },
+ {
+  "va": "00109D90",
+  "name": "FELoading::Instance",
+  "unit": "FETopmost",
+  "size": 112,
+  "status": "PASS",
+  "calls": 56,
+  "runs": "B"
+ },
+ {
+  "va": "001FDC50",
+  "name": "EX6DManager::EX6DManager",
+  "unit": "EXPhysics6D",
+  "size": 96,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "00232F30",
+  "name": "EXSwooshSysMgr::DeleteAllSystems",
+  "unit": "EXSwoosh",
+  "size": 96,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "Baa"
+ },
+ {
+  "va": "0027E4A0",
+  "name": "EXLightManager::RemoveAllDynLights",
+  "unit": "EXLightManager",
+  "size": 96,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "Baa"
+ },
+ {
+  "va": "00081800",
+  "name": "ActorTextureSwap::PreLoadInit",
+  "unit": "ActorTextureSwap",
+  "size": 80,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "Baa"
+ },
+ {
+  "va": "00088930",
+  "name": "AU_GetWorkSheet",
+  "unit": "ActorUtil",
+  "size": 80,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "000D2B10",
+  "name": "FEHud::Instance",
+  "unit": "FEHud",
+  "size": 80,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "000D9500",
+  "name": "FELang::Instance",
+  "unit": "FELang",
+  "size": 80,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "000F4AC0",
+  "name": "FEManager::FEManager",
+  "unit": "FEManager",
+  "size": 80,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "Baa"
+ },
+ {
+  "va": "000FB0B0",
+  "name": "FEPause::Instance",
+  "unit": "FEPause",
+  "size": 80,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "00198310",
+  "name": "VisionWipe::Instance",
+  "unit": "VisionWipe",
+  "size": 80,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "Baa"
+ },
+ {
+  "va": "001A6AF0",
+  "name": "_EXRealloc",
+  "unit": "EXMemoryManager",
+  "size": 80,
+  "status": "PASS",
+  "calls": 1121,
+  "runs": "B"
+ },
+ {
+  "va": "002168A0",
+  "name": "EXBaseDisplay::IsWndVisible",
+  "unit": "EXDisplay",
+  "size": 80,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "Baaaa"
+ },
+ {
+  "va": "0021EE80",
+  "name": "EXBaseWnd::IsChild",
+  "unit": "EXWnd",
+  "size": 80,
+  "status": "PASS",
+  "calls": 9,
+  "runs": "Baaaa"
+ },
+ {
+  "va": "00105330",
+  "name": "FERadar::Instance",
+  "unit": "FERadar",
+  "size": 64,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "Baaaa"
+ },
+ {
+  "va": "001840C0",
+  "name": "TrafficDeinit",
+  "unit": "Traffic",
+  "size": 64,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "Baa"
+ },
+ {
+  "va": "001AB660",
+  "name": "EXRandClass::Randf",
+  "unit": "EXRand",
+  "size": 64,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "0020E870",
+  "name": "EXDList::Remove",
+  "unit": "EXList",
+  "size": 64,
+  "status": "PASS",
+  "calls": 87,
+  "runs": "B"
+ },
+ {
+  "va": "002211E0",
+  "name": "EXStateSaver::EXStateSaver",
+  "unit": "EXStateSaver",
+  "size": 64,
+  "status": "PASS",
+  "calls": 80,
+  "runs": "B"
+ },
+ {
+  "va": "0024F7E0",
+  "name": "EXWnd::SetTriFanZMode",
+  "unit": "XBWndPrim",
+  "size": 64,
+  "status": "PASS",
+  "calls": 141,
+  "runs": "B"
+ },
+ {
+  "va": "00282ED0",
+  "name": "EXBaseTexture::EXBaseTexture",
+  "unit": "EXTexture",
+  "size": 64,
+  "status": "PASS",
+  "calls": 263,
+  "runs": "B"
+ },
+ {
+  "va": "00284C10",
+  "name": "XBBaseBenchMark::StopCPUTimer",
+  "unit": "XBBenchmark",
+  "size": 64,
+  "status": "PASS",
+  "calls": 150,
+  "runs": "B"
+ },
+ {
+  "va": "00272290",
+  "name": "EXEffectsSysTag::DetatchSystems",
+  "unit": "EXEffectsSys",
+  "size": 48,
+  "status": "PASS",
+  "calls": 9,
+  "runs": "B"
+ },
+ {
+  "va": "0021EAD0",
+  "name": "EXGeoSpreadSheet::DataSheetSize",
+  "unit": "EXGeoSpreadSheet",
+  "size": 32,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "00271BD0",
+  "name": "EXStats::EXStats",
+  "unit": "XBStats",
+  "size": 32,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "000D06A0",
+  "name": "XDebug::InitDebugWindows",
+  "unit": "Debug",
+  "size": 16,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "0012DD70",
+  "name": "XItemEnv::Initialise",
+  "unit": "ItemUpdate",
+  "size": 16,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "001A68B0",
+  "name": "EXItemHandler::EXItemHandler",
+  "unit": "EXItemHandler",
+  "size": 16,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "001E24C0",
+  "name": "EXHashCodeFile::Debug_HashCodeName",
+  "unit": "EXHashcode",
+  "size": 16,
+  "status": "PASS",
+  "calls": 6,
+  "runs": "B"
+ },
+ {
+  "va": "00247DC0",
+  "name": "EXCommonCamera::VFOV",
+  "unit": "EXCamera",
+  "size": 16,
+  "status": "PASS",
+  "calls": 158,
+  "runs": "B"
+ },
+ {
+  "va": "002588C0",
+  "name": "EXDebugWndMgr::EXDebugWndMgr",
+  "unit": "EXDebugWnd",
+  "size": 16,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "0026EBF0",
+  "name": "EXGamePad::OpenPads",
+  "unit": "XBGamepad",
+  "size": 16,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "iso (OpenPads alone, 150 frames, return-width fix)"
+ },
+ {
+  "va": "0027DBA0",
+  "name": "EXGeoScript::GetBoundsBox",
+  "unit": "EXGeoScript",
+  "size": 16,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "002859A0",
+  "name": "MXFile::GetLength",
+  "unit": "XBFile",
+  "size": 16,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "002C1E10",
+  "name": "SFXItem::ClearVariables",
+  "unit": "EXAudioBase",
+  "size": 272,
+  "status": "PASS",
+  "calls": 60,
+  "runs": "B"
+ },
+ {
+  "va": "002084E0",
+  "name": "EXGeoHeader::UpdatePtrs",
+  "unit": "EXGeoFile",
+  "size": 368,
+  "status": "PASS",
+  "calls": 9,
+  "runs": "B"
+ },
+ {
+  "va": "001D2A80",
+  "name": "EXItem::GetAnimatorBoundsBox",
+  "unit": "EXItem",
+  "size": 288,
+  "status": "PASS",
+  "calls": 35,
+  "runs": "B"
+ },
+ {
+  "va": "002CE250",
+  "name": "EXAudioCodec::InterpStereo",
+  "unit": "EXAudioCodec",
+  "size": 256,
+  "status": "PASS",
+  "calls": 10,
+  "runs": "B"
+ },
+ {
+  "va": "00199CA0",
+  "name": "XGamePad::Init",
+  "unit": "XGamePad",
+  "size": 96,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "0012DB80",
+  "name": "GeoSectionItem::GeoSectionItem",
+  "unit": "GeoSectionManager",
+  "size": 192,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "00258210",
+  "name": "EXBaseWnd::DbgClear",
+  "unit": "EXWndDebug",
+  "size": 96,
+  "status": "PASS",
+  "calls": 151,
+  "runs": "B"
+ },
+ {
+  "va": "002154A0",
+  "name": "EXItemAnimator::UpdateBoundsBox",
+  "unit": "EXItemAnimator",
+  "size": 160,
+  "status": "PASS",
+  "calls": 17,
+  "runs": "B"
+ },
+ {
+  "va": "00108FD0",
+  "name": "FEObjectHandler::CreateObject",
+  "unit": "FEScript",
+  "size": 112,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "000DBD50",
+  "name": "FELayoutPaged::HandleInput",
+  "unit": "FELayout",
+  "size": 288,
+  "status": "PASS",
+  "calls": 141,
+  "runs": "B"
+ },
+ {
+  "va": "00128610",
+  "name": "GameData::Instance",
+  "unit": "GameData",
+  "size": 64,
+  "status": "PASS",
+  "calls": 430,
+  "runs": "B"
+ },
+ {
+  "va": "001ABBE0",
+  "name": "EXString::ReallocMem",
+  "unit": "EXString",
+  "size": 240,
+  "status": "PASS",
+  "calls": 279,
+  "runs": "B"
+ },
+ {
+  "va": "001B0830",
+  "name": "EXBaseSoundManager::EXBaseSoundManager",
+  "unit": "EXSoundManager",
+  "size": 256,
+  "status": "FAIL",
+  "calls": 1,
+  "frame": 1,
+  "region": "data",
+  "detail": "001B0830 call #1: same pre-state, different post/ret; DIVERGE; alone to f3: DIVERGE f=1 data",
+  "runs": "B"
+ },
+ {
+  "va": "002BEAD0",
+  "name": "EXAudioVoiceManager::CheckForStoppedVoices",
+  "unit": "EXAudioVoice",
+  "size": 256,
+  "status": "PASS",
+  "calls": 164,
+  "runs": "B"
+ },
+ {
+  "va": "001B9460",
+  "name": "EXBaseApp::InitInstance",
+  "unit": "EXApp",
+  "size": 128,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "000F8B20",
+  "name": "FEObject::ListenerChildAdd",
+  "unit": "FEObject",
+  "size": 128,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "002CE970",
+  "name": "revmodel::setpredelay",
+  "unit": "EXAudioDSP",
+  "size": 48,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "001B3C40",
+  "name": "EXItemAnimator_Script::CleanInitialise",
+  "unit": "EXItemAnimator_Script",
+  "size": 224,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "002491F0",
+  "name": "EXDebugTree::ItemHandle",
+  "unit": "EXDebugTree",
+  "size": 208,
+  "status": "PASS",
+  "calls": 4,
+  "runs": "B"
+ },
+ {
+  "va": "001347F0",
+  "name": "XNavMeshHandler::Init",
+  "unit": "NavMeshHdlr",
+  "size": 192,
+  "status": "PASS",
+  "calls": 3,
+  "runs": "B"
+ },
+ {
+  "va": "00271D00",
+  "name": "EXItemRender_Entity::RemoveGDiMemory",
+  "unit": "EXItemRender_Entity",
+  "size": 32,
+  "status": "PASS",
+  "calls": 24,
+  "runs": "B"
+ },
+ {
+  "va": "00284DD0",
+  "name": "XBFileManager::UpdateStats",
+  "unit": "XBFileManager",
+  "size": 144,
+  "status": "PASS",
+  "calls": 162,
+  "runs": "B"
+ },
+ {
+  "va": "0010C4F0",
+  "name": "FEWnd::SetObject",
+  "unit": "FEWnd",
+  "size": 96,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "001BA1F0",
+  "name": "EXBaseGamePad::KillAllRumble",
+  "unit": "EXGamepad",
+  "size": 80,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "0021E3E0",
+  "name": "EXGeoCommonArray_FindIndex2",
+  "unit": "EXGeoCommon",
+  "size": 176,
+  "status": "PASS",
+  "calls": 3,
+  "runs": "B"
+ },
+ {
+  "va": "0012A8B0",
+  "name": "XGameWnd::Update",
+  "unit": "GameWnd",
+  "size": 160,
+  "status": "PASS",
+  "calls": 150,
+  "runs": "B"
+ },
+ {
+  "va": "001736E0",
+  "name": "Text_Shutdown",
+  "unit": "Text",
+  "size": 64,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "00216340",
+  "name": "EXHistogram::Reset",
+  "unit": "EXStats",
+  "size": 144,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "0024DDD0",
+  "name": "EXWnd::_SelectSprite2DTexture",
+  "unit": "XBWndSprite",
+  "size": 80,
+  "status": "PASS",
+  "calls": 44,
+  "runs": "B"
+ },
+ {
+  "va": "002910D0",
+  "name": "EXGeoEntity::OnCreate",
+  "unit": "XBGeoEntity",
+  "size": 160,
+  "status": "PASS",
+  "calls": 112,
+  "runs": "B"
+ },
+ {
+  "va": "002BD550",
+  "name": "EXSfxCmd_Parser::EXSfxCmd_Parser",
+  "unit": "EXSfxcmds",
+  "size": 16,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ },
+ {
+  "va": "002BD910",
+  "name": "EXAudio::psiAsyncOpenFile",
+  "unit": "XBAudio",
+  "size": 96,
+  "status": "PASS",
+  "calls": 38,
+  "runs": "B"
+ },
+ {
+  "va": "000F68E0",
+  "name": "FEListener::RemapModeSet",
+  "unit": "FENavigator",
+  "size": 128,
+  "status": "PASS",
+  "calls": 2,
+  "runs": "B"
+ },
+ {
+  "va": "002052A0",
+  "name": "EXItemEnv::RegisterEnvView",
+  "unit": "EXItemEnv",
+  "size": 128,
+  "status": "PASS",
+  "calls": 1,
+  "runs": "B"
+ }
+]

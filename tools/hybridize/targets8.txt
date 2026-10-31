@@ -1,0 +1,8 @@
+# Functions swapped to native C++ generated from pcj-decomp (tools/hybridize).
+# One group per unit: unit=<pcj-decomp unit> followed by VAs (must be MATCH).
+# Changing this list changes the recompiler's --exclude-manual input
+# (build/hybrid/hybrid_swap.c + src/det_file.c): regenerate src/recomp/gen afterwards (RUN.md).
+unit=FEScript 001077C0 00107A40 00107C30 00107A90
+unit=FELayout 000DB970
+unit=EXApp 001B97B0
+unit=FEObject 000F97D0 000F9680

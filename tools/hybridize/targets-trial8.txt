@@ -1,0 +1,6 @@
+# Round-2 trial set (docs/hybridize.md): the round-1 four plus four trial targets.
+# Built in build-trial8 against work/hyscan/trial8/gen (regenerated with this set).
+unit=FEScript 001077C0 00107A40 00107A90 00107C30
+unit=FELayout 000DB970
+unit=EXApp 001B97B0
+unit=FEObject 000F97D0 000F9680

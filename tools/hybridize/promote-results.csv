@@ -1,0 +1,121 @@
+va,name,unit,size,status,calls,first_divergent_frame,region,detail,group_runs
+002C3D40,EXAudioBase::EXAudioBase,EXAudioBase,960,FAIL,1,0,crash/hang,no clean stop (rc=-9); alone to f3: no clean stop rc=-10,Aaaaaa
+00209270,EXGeoFile::Update,EXGeoFile,672,PASS,951,,,,Aaaa
+001D20F0,EXPlacementItem::CalcMatrix,EXItem,560,PASS,70,,,,Aaaa
+002CDF60,EXAudioCodec::ReleaseEnvStereo,EXAudioCodec,560,PASS,1,,,,Aaaa
+00199F40,XGamePad::LookupButton,XGamePad,496,PASS,68,,,,Aaabaa
+0012D8F0,GeoSectionItem::Update,GeoSectionManager,416,PASS,69,,,,Aaaaab
+002582D0,EXBaseWnd::CreateDbgMem,EXWndDebug,400,PASS,4,,,,A
+00216070,EXItemAnimatorQueue::Allocate,EXItemAnimator,368,PASS,15,,,,Aaaaab
+00107520,FEObjectScript::Play,FEScript,352,PASS,1,,,,A
+000DC860,FELayoutScrollGrid::EnsureVisible,FELayout,336,PASS,1,,,,A
+00129270,GameData::DataTransfer,GameData,336,PASS,150,,,,A
+001ACB80,EXStringArray::SetSize,EXString,304,FAIL,493,1,data,001ACB80 call #1: same pre-state; different post/ret; DIVERGE; alone to f3: DIVERGE f=1 data,Aaab
+001AED60,EXBaseSoundManager::CommandUpdate,EXSoundManager,304,PASS,190,,,,A
+002BFF10,EXAudioVoiceManager::EXAudioVoiceManager,EXAudioVoice,304,FAIL,1,0,crash/hang,first differing logged call 001ABBE0 #16; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data,A
+001B9A10,EXBaseApp::UpdateFrameRate,EXApp,288,PASS,150,,,,A
+0027A640,EXBoundsBox::Accumulate,EXBounds,288,PASS,35,,,,A
+000F8F90,FEObject::CalculateTextRect,FEObject,272,PASS,1047,,,,A
+002CE720,revmodel::mute,EXAudioDSP,256,PASS,1,,,,A
+000ADA40,CFormation::CFormation,AIFormation,240,FAIL,1,0,crash/hang,000ADA40 call #1: same pre-state; different post/ret; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data,A
+001B33A0,EXItemAnimator_Script::AddItemThread,EXItemAnimator_Script,240,PASS,15,,,,A
+002490D0,EXDebugTree::SectionHandle,EXDebugTree,240,PASS,83,,,,A
+00134F60,XNavLocation::XNavLocation,NavMeshHdlr,224,PASS,11,,,,A
+00271D30,EXItemRender_Entity::Initialise,EXItemRender_Entity,224,PASS,15,,,,A
+00285180,XBFileManager::FileRead,XBFileManager,224,PASS,59,,,,A
+00110220,FEBaseWnd::FEBaseWnd,FEWnd,208,FAIL,3,0,hang,hangs the boot (screen; rc=-10 stall kill); also in round 4; alone to f3: no clean stop rc=-10,screen
+001B9D70,EXBaseGamePad::EXBaseGamePad,EXGamepad,208,PASS,1,,,,A
+0021E900,EXGeoCommonArray_FindIndex,EXGeoCommon,208,PASS,2050,,,,A
+0012A360,LoadSoundBank,GameWnd,192,PASS,1,,,,A
+0013E120,XNavRoute::XNavRoute,NavRoute,192,PASS,1,,,,A
+00173110,FEText::Decompress,Text,176,PASS,45,,,,A
+002163D0,EXHistogram::Add,EXStats,176,PASS,300,,,,A
+0024E0C0,EXWnd::_DrawSprite2D,XBWndSprite,176,PASS,40,,,,A
+0028CD00,EXGeoEntity::CreateRGBAVertexBuffers,XBGeoEntity,176,PASS,112,,,,A
+002BD590,EXSfxCmd_Parser::ProcessCommands,EXSfxcmds,176,PASS,162,,,,B
+002BD9E0,EXAudio::psiAsyncReadFile,XBAudio,176,PASS,39,,,,B
+000F7140,FEListener::LastInputUpdate,FENavigator,160,PASS,150,,,,B
+00205200,EXItemEnvView::EXItemEnvView,EXItemEnv,160,PASS,1,,,,B
+0023A530,EXParticleSysMgr::EXParticleSysMgr,EXParticle,160,FAIL,4,0,hang,hangs the boot (screen; rc=-10 stall kill); also in round 4; alone to f3: no clean stop rc=-10,screen
+00274DA0,EXGDiData::Release,XBGeoDrawInfo,160,PASS,9,,,,B
+00278FA0,EXSoundManager::EXSoundManager,XBSoundManager,160,PASS,1,,,,B
+002C7140,AudioMixer::DecodeVoice,EXAudioMixer,160,PASS,10,,,,B
+002C7A60,AsyncFile::Init,EXFileManager,160,PASS,3,,,,B
+002C8C20,EXAudioMemory::Alloc,EXAudioMemory,160,PASS,3,,,,B
+000AC8F0,AIControl::AIControl,AIControl,144,FAIL,1,0,crash/hang,000AC8F0 call #1: same pre-state; different post/ret; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data,A
+000E3B60,FEMainMenu::SetState,FEMainMenu,144,PASS,1,,,,B
+001B0C10,EXItemAnimator_Entity::Initialise,EXItemAnimator_Entity,128,FAIL,15,9,crash/hang,[HYB] blamed native 001B0C10; no clean stop (rc=-6); alone to f3: image f00002.bmp,B
+00222080,EXFileSys::OnLoadFile,EXFileSys,128,PASS,5,,,,B
+00248F50,EXWatcher::EXWatcher,EXWatcher,128,FAIL,1,0,crash/hang,00248F50 call #1: same pre-state; different post/ret; no clean stop (rc=-9); alone to f3: DIVERGE f=1 data,A
+0024B020,EXMenu::AddSubMenu,EXMenu,128,PASS,9,,,,B
+00259B50,EXFile::CreateMXFile,EXFile,128,PASS,10,,,,B
+00021E70,Actor::PreLoadInit,Actor,112,PASS,1,,,,Baa
+000E0360,FELevelManager::LevelFromHash,FELevels,112,PASS,3,,,,B
+00109D90,FELoading::Instance,FETopmost,112,PASS,56,,,,B
+001FDC50,EX6DManager::EX6DManager,EXPhysics6D,96,PASS,1,,,,B
+00232F30,EXSwooshSysMgr::DeleteAllSystems,EXSwoosh,96,PASS,1,,,,Baa
+0027E4A0,EXLightManager::RemoveAllDynLights,EXLightManager,96,PASS,1,,,,Baa
+00081800,ActorTextureSwap::PreLoadInit,ActorTextureSwap,80,PASS,1,,,,Baa
+00088930,AU_GetWorkSheet,ActorUtil,80,PASS,2,,,,B
+000D2B10,FEHud::Instance,FEHud,80,PASS,2,,,,B
+000D9500,FELang::Instance,FELang,80,PASS,1,,,,B
+000F4AC0,FEManager::FEManager,FEManager,80,PASS,2,,,,Baa
+000FB0B0,FEPause::Instance,FEPause,80,PASS,2,,,,B
+00198310,VisionWipe::Instance,VisionWipe,80,PASS,1,,,,Baa
+001A6AF0,_EXRealloc,EXMemoryManager,80,PASS,1121,,,,B
+002168A0,EXBaseDisplay::IsWndVisible,EXDisplay,80,PASS,2,,,,Baaaa
+0021EE80,EXBaseWnd::IsChild,EXWnd,80,PASS,9,,,,Baaaa
+00105330,FERadar::Instance,FERadar,64,PASS,2,,,,Baaaa
+001840C0,TrafficDeinit,Traffic,64,PASS,1,,,,Baa
+001AB660,EXRandClass::Randf,EXRand,64,PASS,2,,,,B
+0020E870,EXDList::Remove,EXList,64,PASS,87,,,,B
+002211E0,EXStateSaver::EXStateSaver,EXStateSaver,64,PASS,80,,,,B
+0024F7E0,EXWnd::SetTriFanZMode,XBWndPrim,64,PASS,141,,,,B
+00282ED0,EXBaseTexture::EXBaseTexture,EXTexture,64,PASS,263,,,,B
+00284C10,XBBaseBenchMark::StopCPUTimer,XBBenchmark,64,PASS,150,,,,B
+00272290,EXEffectsSysTag::DetatchSystems,EXEffectsSys,48,PASS,9,,,,B
+0021EAD0,EXGeoSpreadSheet::DataSheetSize,EXGeoSpreadSheet,32,PASS,2,,,,B
+00271BD0,EXStats::EXStats,XBStats,32,PASS,1,,,,B
+000D06A0,XDebug::InitDebugWindows,Debug,16,PASS,1,,,,B
+0012DD70,XItemEnv::Initialise,ItemUpdate,16,PASS,2,,,,B
+001A68B0,EXItemHandler::EXItemHandler,EXItemHandler,16,PASS,2,,,,B
+001E24C0,EXHashCodeFile::Debug_HashCodeName,EXHashcode,16,PASS,6,,,,B
+00247DC0,EXCommonCamera::VFOV,EXCamera,16,PASS,158,,,,B
+002588C0,EXDebugWndMgr::EXDebugWndMgr,EXDebugWnd,16,PASS,1,,,,B
+0026EBF0,EXGamePad::OpenPads,XBGamepad,16,PASS,1,,,,iso (OpenPads alone; 150 frames; return-width fix)
+0027DBA0,EXGeoScript::GetBoundsBox,EXGeoScript,16,PASS,2,,,,B
+002859A0,MXFile::GetLength,XBFile,16,PASS,1,,,,B
+002C1E10,SFXItem::ClearVariables,EXAudioBase,272,PASS,60,,,,B
+002084E0,EXGeoHeader::UpdatePtrs,EXGeoFile,368,PASS,9,,,,B
+001D2A80,EXItem::GetAnimatorBoundsBox,EXItem,288,PASS,35,,,,B
+002CE250,EXAudioCodec::InterpStereo,EXAudioCodec,256,PASS,10,,,,B
+00199CA0,XGamePad::Init,XGamePad,96,PASS,1,,,,B
+0012DB80,GeoSectionItem::GeoSectionItem,GeoSectionManager,192,PASS,1,,,,B
+00258210,EXBaseWnd::DbgClear,EXWndDebug,96,PASS,151,,,,B
+002154A0,EXItemAnimator::UpdateBoundsBox,EXItemAnimator,160,PASS,17,,,,B
+00108FD0,FEObjectHandler::CreateObject,FEScript,112,PASS,2,,,,B
+000DBD50,FELayoutPaged::HandleInput,FELayout,288,PASS,141,,,,B
+00128610,GameData::Instance,GameData,64,PASS,430,,,,B
+001ABBE0,EXString::ReallocMem,EXString,240,PASS,279,,,,B
+001B0830,EXBaseSoundManager::EXBaseSoundManager,EXSoundManager,256,FAIL,1,1,data,001B0830 call #1: same pre-state; different post/ret; DIVERGE; alone to f3: DIVERGE f=1 data,B
+002BEAD0,EXAudioVoiceManager::CheckForStoppedVoices,EXAudioVoice,256,PASS,164,,,,B
+001B9460,EXBaseApp::InitInstance,EXApp,128,PASS,1,,,,B
+000F8B20,FEObject::ListenerChildAdd,FEObject,128,PASS,1,,,,B
+002CE970,revmodel::setpredelay,EXAudioDSP,48,PASS,1,,,,B
+001B3C40,EXItemAnimator_Script::CleanInitialise,EXItemAnimator_Script,224,PASS,2,,,,B
+002491F0,EXDebugTree::ItemHandle,EXDebugTree,208,PASS,4,,,,B
+001347F0,XNavMeshHandler::Init,NavMeshHdlr,192,PASS,3,,,,B
+00271D00,EXItemRender_Entity::RemoveGDiMemory,EXItemRender_Entity,32,PASS,24,,,,B
+00284DD0,XBFileManager::UpdateStats,XBFileManager,144,PASS,162,,,,B
+0010C4F0,FEWnd::SetObject,FEWnd,96,PASS,1,,,,B
+001BA1F0,EXBaseGamePad::KillAllRumble,EXGamepad,80,PASS,1,,,,B
+0021E3E0,EXGeoCommonArray_FindIndex2,EXGeoCommon,176,PASS,3,,,,B
+0012A8B0,XGameWnd::Update,GameWnd,160,PASS,150,,,,B
+001736E0,Text_Shutdown,Text,64,PASS,1,,,,B
+00216340,EXHistogram::Reset,EXStats,144,PASS,2,,,,B
+0024DDD0,EXWnd::_SelectSprite2DTexture,XBWndSprite,80,PASS,44,,,,B
+002910D0,EXGeoEntity::OnCreate,XBGeoEntity,160,PASS,112,,,,B
+002BD550,EXSfxCmd_Parser::EXSfxCmd_Parser,EXSfxcmds,16,PASS,1,,,,B
+002BD910,EXAudio::psiAsyncOpenFile,XBAudio,96,PASS,38,,,,B
+000F68E0,FEListener::RemapModeSet,FENavigator,128,PASS,2,,,,B
+002052A0,EXItemEnv::RegisterEnvView,EXItemEnv,128,PASS,1,,,,B

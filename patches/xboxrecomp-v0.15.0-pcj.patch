@@ -1,0 +1,3642 @@
+diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
+index 7746ae3..f1a7a86 100644
+--- a/src/apu/apu_core.c
++++ b/src/apu/apu_core.c
+@@ -115,6 +115,10 @@ uint8_t *mcpx_apu_phys(uint64_t addr)
+      * the voice-array case below still holds for the image. */
+     if (xbox_PhysRamNameMap()[a >> 12])
+         return g_apu_ram_ptr + a;
++    /* Likewise an image page the title named: a DMA buffer in .data or BSS
++     * (xbox_PhysImageNameMap says which title and why). */
++    if (xbox_PhysImageNameMap()[a >> 12])
++        return g_apu_ram_ptr + a;
+     /* A page the contiguous allocator handed out is the window, even where
+      * it overlaps the image's physical range: an image whose BSS runs past
+      * 48 MB can have DirectSound's voice array at a window address inside
+@@ -146,6 +150,8 @@ const char *mcpx_apu_phys_class(uint64_t addr)
+         return a < apu_mapped_ram() ? "ram" : "wrap";
+     if (xbox_PhysRamNameMap()[a >> 12])
+         return "named";
++    if (xbox_PhysImageNameMap()[a >> 12])
++        return "imgnamed";
+     if (xbox_ContiguousPageMap()[a >> 12])
+         return "win";
+     if (a >= g_xbox_image_lo && a < g_xbox_image_hi)
+@@ -308,7 +314,7 @@ static void apu_deliver_irq(MCPXAPUState *d)
+     if (!routine || !recomp_lookup(routine))
+         return;
+     if (!tib_ready) {
+-        uint32_t tib = xbox_AllocThreadTib();
++        uint32_t tib = xbox_AllocHelperTib();
+         if (!tib)
+             return;
+         g_fs_base = tib;
+@@ -486,6 +492,8 @@ static struct {
+ /* Ring of waveOut buffers for double-buffering */
+ #define WAVEOUT_NUM_BUFS 4
+ #define WAVEOUT_BUF_SAMPLES 2048  /* ~42.7ms at 48kHz, matches 8-frame delivery rate */
++/* Called with every output period (stereo s16, frames, rate) before it is played. */
++void (*volatile g_apu_output_hook)(int16_t *stereo, int frames, int rate);
+ #define MIXER_FRAME_SAMPLES 256  /* Internal mixing frame size (matches frame_buf) */
+ /* monitor.queued_bytes_low/high are the pacing marks in bytes of stereo
+  * s16 output; pacing compares them in samples (SAMPLE_BYTES each), so a
+@@ -909,6 +917,11 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
+         mix_into(period, (const int16_t (*)[2])extra, MIXER_FRAME_SAMPLES);
+     }
+ 
++    /* The port's own audio sources (a title's software mixer played natively)
++     * add into the period here, at the output rate, before the dump and the device. */
++    if (g_apu_output_hook && !(xa2_is_active() && d->pace_stalled))
++        g_apu_output_hook((int16_t *)period, MIXER_FRAME_SAMPLES, 48000);
++
+     /* A period dropped while pacing is stalled never reaches the device,
+      * so it stays out of the dump too. */
+     if (!(xa2_is_active() && d->pace_stalled))
+@@ -1702,3 +1715,25 @@ static void mixer_render(int16_t frame_buf[][2], int num_samples)
+     }
+     LeaveCriticalSection(&g_mixer_cs);
+ }
++
++/* ---- save states (kernel/xbox_snapshot.h) --------------------------------
++ * Held across a save or load so the frame thread is not walking the voice
++ * lists in guest memory while they are copied; the register file and the
++ * per-voice stream segment positions travel with the state. */
++#include "../kernel/xbox_snapshot.h"
++
++void mcpx_apu_snap_lock(int on)
++{
++    if (!g_state) return;
++    if (on) qemu_mutex_lock(&g_state->lock);
++    else qemu_mutex_unlock(&g_state->lock);
++}
++int mcpx_apu_snap_regions(XboxSnapRegion *r, int max)
++{
++    int n = 0;
++    if (!g_state) return 0;
++    if (n < max) { r[n].p = g_state->regs; r[n].n = sizeof g_state->regs; r[n].name = "apu.regs"; } n++;
++    if (n < max) { r[n].p = g_state->vp.ssl; r[n].n = sizeof g_state->vp.ssl; r[n].name = "apu.vp.ssl"; } n++;
++    if (n < max) { r[n].p = &g_state->vp.ssl_base_page; r[n].n = sizeof g_state->vp.ssl_base_page; r[n].name = "apu.vp.ssl_base"; } n++;
++    return n;
++}
+diff --git a/src/apu/apu_dsp.c b/src/apu/apu_dsp.c
+index bd36f2a..ab8f245 100644
+--- a/src/apu/apu_dsp.c
++++ b/src/apu/apu_dsp.c
+@@ -281,7 +281,25 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d,
+             if (mcpx_apu_mixdown_all()) {
+                 left = 0.0f;
+                 right = 0.0f;
+-                for (int b = 0; b < NUM_MIXBINS; ++b) {
++                /* Bins 0-5 are DirectSound's speaker bins: front L/R,
++                 * centre, LFE, surround L/R. Fold them to stereo as a
++                 * downmix does (centre and surrounds at -3 dB to both
++                 * sides, LFE dropped). The even/odd rule put the centre in
++                 * the left channel only, the LFE in the right only: PCJ
++                 * feeds every one of its five music voices to LFE as well,
++                 * so the right channel ran ~4 dB hot (Predator: Concrete
++                 * Jungle mixes music into FL, FR, C, SL, SR + LFE).
++                 * RECOMP_APU_DOWNMIX=0 restores even/odd for these too. */
++                static int dm = -1;
++                int b0 = 0;
++                if (dm < 0) { const char *e = getenv("RECOMP_APU_DOWNMIX"); dm = !(e && e[0] == '0'); }
++                if (dm) {
++                    const float k = 0.70710678f;
++                    left  = mixbins[0][i] + k * (mixbins[2][i] + mixbins[4][i]);
++                    right = mixbins[1][i] + k * (mixbins[2][i] + mixbins[5][i]);
++                    b0 = 6;
++                }
++                for (int b = b0; b < NUM_MIXBINS; ++b) {
+                     if (b & 1) right += mixbins[b][i];
+                     else       left  += mixbins[b][i];
+                 }
+diff --git a/src/apu/apu_mmio_hook.c b/src/apu/apu_mmio_hook.c
+index 235140f..5574abd 100644
+--- a/src/apu/apu_mmio_hook.c
++++ b/src/apu/apu_mmio_hook.c
+@@ -7,6 +7,9 @@
+  * APU register handlers.
+  */
+ 
++#if !defined(_WIN32) && defined(__x86_64__) && !defined(_GNU_SOURCE)
++#define _GNU_SOURCE 1   /* REG_* gregs indices in <sys/ucontext.h> */
++#endif
+ #include "apu.h"
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -180,3 +183,72 @@ bool apu_hook_handle_mmio_posix(void *ucv, uintptr_t fault_addr,
+     return false;
+ }
+ #endif
++
++#if !defined(_WIN32) && defined(__x86_64__)
++/* POSIX x86-64: the shared x86-64 decoder (mmio_decode.h) over the signal
++ * handler's ucontext. Registers are copied into the decoder's context and
++ * back, so the decoder stays the one Windows uses. */
++#include <signal.h>
++#include <ucontext.h>
++#define MMIO_DECODE_POSIX_CONTEXT 1
++#include "../platform/mmio_decode.h"
++
++#define APU_MMIO_BASE  0xFE800000u
++#define APU_MMIO_SIZE  0x00080000u
++
++static int g_apu_mmio_decode_fail;
++
++static uint64_t apu_mmio_rd(void *dev, uint32_t off, int size)
++{
++    if (size == 8) {
++        uint64_t lo = mcpx_apu_mmio_read((MCPXAPUState *)dev, off, 4);
++        uint64_t hi = mcpx_apu_mmio_read((MCPXAPUState *)dev, off + 4, 4);
++        return lo | (hi << 32);
++    }
++    return mcpx_apu_mmio_read((MCPXAPUState *)dev, off, (unsigned)size);
++}
++
++static void apu_mmio_wr(void *dev, uint32_t off, uint64_t v, int size)
++{
++    if (size == 8) {
++        mcpx_apu_mmio_write((MCPXAPUState *)dev, off, (uint32_t)v, 4);
++        mcpx_apu_mmio_write((MCPXAPUState *)dev, off + 4, (uint32_t)(v >> 32), 4);
++        return;
++    }
++    mcpx_apu_mmio_write((MCPXAPUState *)dev, off, v, (unsigned)size);
++}
++
++bool apu_hook_handle_mmio_posix(void *ucv, uintptr_t fault_addr,
++                                uint32_t fault_xbox_va, int is_write)
++{
++    ucontext_t *uc = (ucontext_t *)ucv;
++    greg_t *g = uc->uc_mcontext.gregs;
++    uint32_t off = fault_xbox_va - APU_MMIO_BASE;
++    MMIO_CONTEXT c;
++    int ok;
++
++    (void)fault_addr; (void)is_write;
++    if (!g_apu_state || off >= APU_MMIO_SIZE)
++        return false;
++    c.Rax = g[REG_RAX]; c.Rcx = g[REG_RCX]; c.Rdx = g[REG_RDX]; c.Rbx = g[REG_RBX];
++    c.Rsp = g[REG_RSP]; c.Rbp = g[REG_RBP]; c.Rsi = g[REG_RSI]; c.Rdi = g[REG_RDI];
++    c.R8 = g[REG_R8];   c.R9 = g[REG_R9];   c.R10 = g[REG_R10]; c.R11 = g[REG_R11];
++    c.R12 = g[REG_R12]; c.R13 = g[REG_R13]; c.R14 = g[REG_R14]; c.R15 = g[REG_R15];
++    c.Rip = g[REG_RIP]; c.EFlags = (uint32_t)g[REG_EFL];
++    ok = mmio_emulate(&c, off, g_apu_state, apu_mmio_rd, apu_mmio_wr);
++    if (ok) {
++        g[REG_RAX] = c.Rax; g[REG_RCX] = c.Rcx; g[REG_RDX] = c.Rdx; g[REG_RBX] = c.Rbx;
++        g[REG_RSP] = c.Rsp; g[REG_RBP] = c.Rbp; g[REG_RSI] = c.Rsi; g[REG_RDI] = c.Rdi;
++        g[REG_R8] = c.R8;   g[REG_R9] = c.R9;   g[REG_R10] = c.R10; g[REG_R11] = c.R11;
++        g[REG_R12] = c.R12; g[REG_R13] = c.R13; g[REG_R14] = c.R14; g[REG_R15] = c.R15;
++        g[REG_RIP] = c.Rip; g[REG_EFL] = (greg_t)((g[REG_EFL] & ~0xFFFFFFFFll) | c.EFlags);
++        return true;
++    }
++    if (++g_apu_mmio_decode_fail <= 20) {
++        const uint8_t *ip = (const uint8_t *)(uintptr_t)g[REG_RIP];
++        fprintf(stderr, "[APU] MMIO decode fail at RIP=%p offset=0x%X: %02X %02X %02X %02X %02X %02X\n",
++                (void *)ip, off, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
++    }
++    return false;
++}
++#endif
+diff --git a/src/apu/apu_vp.c b/src/apu/apu_vp.c
+index 3ec56ca..eadd7d2 100644
+--- a/src/apu/apu_vp.c
++++ b/src/apu/apu_vp.c
+@@ -761,6 +761,8 @@ struct VpVoiceStat {
+     uint16_t vol0, vol1;
+     uint8_t  bin0, bin1;
+     const char *cls;
++    uint16_t vol[8];
++    uint8_t  bin[8];
+ };
+ static struct VpVoiceStat s_vstat[MCPX_HW_MAX_VOICES];
+ static int s_vstat_on = -1;
+@@ -866,6 +868,9 @@ static void vp_stat_report(void)
+                 s->rate, s->ea, s->vol0, s->vol1, s->bin0, s->bin1, s->addr,
+                 s->cls ? s->cls : "?", s->frames,
+                 sqrt(s->sq / s->frames) * 32768.0, (double)s->zc / s->frames);
++        fprintf(stderr, "[APU-VBINS] v=%u", v);
++        for (int k = 0; k < 8; k++) fprintf(stderr, " %u:%03X", s->bin[k], s->vol[k]);
++        fprintf(stderr, "\n");
+         s->frames = 0; s->zc = 0; s->sq = 0;
+     }
+ }
+@@ -1537,6 +1542,7 @@ static void voice_process(MCPXAPUState *d,
+         s_vstat[v].rate = rate;
+         s_vstat[v].vol0 = vol[0]; s_vstat[v].vol1 = vol[1];
+         s_vstat[v].bin0 = (uint8_t)bin[0]; s_vstat[v].bin1 = (uint8_t)bin[1];
++        for (int k = 0; k < 8; k++) { s_vstat[v].vol[k] = vol[k]; s_vstat[v].bin[k] = (uint8_t)bin[k]; }
+     }
+ 
+     if (voice_should_mute(v)) return;
+diff --git a/src/kernel/CMakeLists.txt b/src/kernel/CMakeLists.txt
+index db45d05..01a05f1 100644
+--- a/src/kernel/CMakeLists.txt
++++ b/src/kernel/CMakeLists.txt
+@@ -27,6 +27,7 @@ set(KERNEL_SOURCES
+     recomp_trace.c
+     nv2a_pb_scan.c
+     nv2a_pb_exec.c
++    nv2a_gpu_census.c
+     nv2a_flip_hold.c
+     nv2a_vsh_interp.c
+     nv2a_combiner.c
+diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
+index 10d00f4..0914717 100644
+--- a/src/kernel/kernel_bridge.c
++++ b/src/kernel/kernel_bridge.c
+@@ -223,7 +223,10 @@ static void kernel_data_init(void)
+ 
+     /* KeTickCount (ordinal 156) - initialized to current tick count.
+      * A background thread in main.c updates this every ~1ms. */
+-    BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT) = GetTickCount();
++    {
++        extern volatile int xbox_det_time;   /* kernel_hal.c: deterministic clock starts at 0 */
++        BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT) = xbox_det_time ? 0 : GetTickCount();
++    }
+ 
+     /* LaunchDataPage (ordinal 164).
+      *
+@@ -376,6 +379,11 @@ static unsigned long long g_ordinal_calls[XBOX_KERNEL_THUNK_TABLE_SIZE];
+  * "count <= log budget" turned true, and every kernel call then wrote two log
+  * lines through the shared stderr lock -- the frame rate fell to ~1 FPS. */
+ static long long g_kernel_call_count = 0;
++/* Per-ordinal call counts, read-only (a host-side tool that reruns guest
++ * code, pcj-native swap_verify.c, needs to know whether a run allocated or
++ * created handles: those effects live in host memory and cannot be rolled
++ * back). */
++const unsigned long long *xbox_KernelOrdinalCalls(void) { return g_ordinal_calls; }
+ 
+ /* How many kernel calls get logged before the log goes quiet.
+  *
+@@ -474,6 +482,7 @@ static int bridge_run_io_apcs(uint32_t alertable, uint32_t wait_mode);
+ struct bridge_thread_start {
+     recomp_func_t fn;
+     uint32_t ctx1, ctx2, stack_top, obj_va, tls_size;
++    uint32_t tib;   /* allocated by the creator (deterministic heap order) */
+ };
+ 
+ /* Lay out a thread's TLS the way the Xbox kernel does.
+@@ -710,6 +719,8 @@ static void bridge_run_thread_inline(recomp_func_t fn, uint32_t ctx1,
+ void guest_cpu_join(void);
+ void guest_cpu_part(void);
+ 
++static void snap_thread_join(void);
++static void snap_thread_part(void);
+ static DWORD WINAPI bridge_thread_main(LPVOID param)
+ {
+     struct bridge_thread_start *s = (struct bridge_thread_start *)param;
+@@ -727,7 +738,7 @@ static DWORD WINAPI bridge_thread_main(LPVOID param)
+     g_thread_stack_top = s->stack_top;
+     g_thread_obj_va = s->obj_va;
+     {
+-        uint32_t tib = xbox_AllocThreadTib();
++        uint32_t tib = s->tib;
+         if (tib)
+             g_fs_base = tib;
+         else
+@@ -751,7 +762,9 @@ static DWORD WINAPI bridge_thread_main(LPVOID param)
+     xbox_DpcMarkGuestThread();
+     xbox_GuestThreadPin("guest-worker");
+     guest_cpu_join();
++    snap_thread_join();
+     bridge_run_thread_inline(fn, ctx1, ctx2);
++    snap_thread_part();
+     guest_cpu_part();
+ 
+     fprintf(stderr, "  [KERNEL] worker thread returned (eax=0x%08X)\n", g_eax);
+@@ -778,6 +791,10 @@ static HANDLE bridge_spawn_thread(recomp_func_t fn, uint32_t ctx1,
+     s->fn = fn; s->ctx1 = ctx1; s->ctx2 = ctx2; s->stack_top = stack_top;
+     s->obj_va = obj_va;
+     s->tls_size = tls_size;
++    /* The TIB comes from the shared guest heap. Taking it here, on the creating
++     * thread, instead of in bridge_thread_main keeps the heap order (and every
++     * later stack and TIB address) independent of when the new thread starts. */
++    s->tib = xbox_AllocThreadTib();
+ 
+     th = CreateThread(NULL, 0, bridge_thread_main, s, 0, NULL);
+     if (!th) free(s);
+@@ -3754,7 +3771,7 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+          * every worker: a DPC routine with an SEH prologue reads fs:[0],
+          * and a thread whose g_fs_base is zero faults inside the runtime
+          * before the routine runs. */
+-        uint32_t tib = xbox_AllocThreadTib();
++        uint32_t tib = xbox_AllocHelperTib();
+         if (!tib) {
+             fprintf(stderr, "  [KERNEL] timer thread has no TIB; "
+                             "timer DPCs will not run\n");
+@@ -4097,6 +4114,99 @@ static HANDLE bridge_resolve_handle(uint32_t token)
+     return (HANDLE)(uintptr_t)token;
+ }
+ 
++/* Save-state support (kernel/xbox_snapshot.h): the read position of every open file. */
++#include "xbox_snapshot.h"
++#if !defined(_WIN32)
++#include <sys/stat.h>
++#include <unistd.h>
++#endif
++static int snap_file_pos(HANDLE h, int64_t *pos, int64_t *size, const int64_t *set)
++{
++#if defined(_WIN32)
++    LARGE_INTEGER z, cur, sz;
++    z.QuadPart = set ? *set : 0;
++    if (!SetFilePointerEx(h, z, &cur, set ? FILE_BEGIN : FILE_CURRENT)) return 0;
++    if (pos) *pos = cur.QuadPart;
++    if (size) *size = GetFileSizeEx(h, &sz) ? sz.QuadPart : -1;
++    return 1;
++#else
++    int fd = w32_handle_fd(h);
++    struct stat st;
++    off_t o;
++    if (fd < 0) return 0;
++    o = set ? lseek(fd, (off_t)*set, SEEK_SET) : lseek(fd, 0, SEEK_CUR);
++    if (o < 0) return 0;
++    if (pos) *pos = (int64_t)o;
++    if (size) *size = fstat(fd, &st) == 0 ? (int64_t)st.st_size : -1;
++    return 1;
++#endif
++}
++static int snap_file_path(HANDLE h, char *out, int n)
++{
++#if defined(_WIN32)
++    DWORD k = GetFinalPathNameByHandleA(h, out, (DWORD)n, 0);
++    if (k == 0 || k >= (DWORD)n) { out[0] = 0; return 0; }
++    return 1;
++#else
++    char link[64];
++    ssize_t k;
++    int fd = w32_handle_fd(h);
++    if (fd < 0) { out[0] = 0; return 0; }
++    snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
++    k = readlink(link, out, (size_t)n - 1);
++    if (k <= 0) { out[0] = 0; return 0; }
++    out[k] = 0;
++    return 1;
++#endif
++}
++int xbox_snap_files(XboxSnapFile *f, int max)
++{
++    int i, n = 0;
++    handle_lock();
++    for (i = 1; i < BRIDGE_HANDLE_MAX && n < max; i++) {
++        HANDLE h = s_handle_table[i];
++        if (!h) continue;
++        if (!snap_file_pos(h, &f[n].pos, &f[n].size, NULL)) continue;   /* not a file */
++        snap_file_path(h, f[n].path, (int)sizeof f[n].path);
++        f[n].slot = (uint32_t)i;
++        n++;
++    }
++    handle_unlock();
++    return n;
++}
++/* Put each saved file back in its slot at its saved read position. A slot that holds the same
++ * file is only repositioned; a slot that is empty or holds another file now (the level was
++ * reloaded since the save and opened its files in another order) gets the saved file reopened
++ * (read access), since the loaded game's memory names that slot. */
++int xbox_snap_files_restore(const XboxSnapFile *f, int n)
++{
++    int i, done = 0;
++    handle_lock();
++    for (i = 0; i < n; i++) {
++        HANDLE h;
++        char cur[260];
++        if (f[i].slot == 0 || f[i].slot >= BRIDGE_HANDLE_MAX) continue;
++        h = s_handle_table[f[i].slot];
++        if (h && f[i].path[0] && snap_file_path(h, cur, (int)sizeof cur) && !strcmp(cur, f[i].path)) {
++            if (snap_file_pos(h, NULL, NULL, &f[i].pos)) done++;
++            continue;
++        }
++        if (!f[i].path[0]) continue;
++        h = CreateFileA(f[i].path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
++                        FILE_ATTRIBUTE_NORMAL, NULL);
++        if (!h || h == INVALID_HANDLE_VALUE) {
++            fprintf(stderr, "[SNAP] cannot reopen %s for slot %u\n", f[i].path, (unsigned)f[i].slot);
++            continue;
++        }
++        snap_file_pos(h, NULL, NULL, &f[i].pos);
++        s_handle_table[f[i].slot] = h;   /* the handle there before belongs to nothing the game knows now */
++        fprintf(stderr, "[SNAP] reopened %s in slot %u at %lld\n", f[i].path, (unsigned)f[i].slot, (long long)f[i].pos);
++        done++;
++    }
++    handle_unlock();
++    return done;
++}
++
+ static HANDLE bridge_take_handle(uint32_t token)
+ {
+     if ((token & 0xFF000000u) == BRIDGE_HANDLE_TAG) {
+@@ -10785,6 +10895,42 @@ void guest_cpu_part(void)
+     xbox_GuestCpuPart();
+ }
+ 
++
++/* ---- save-state gate (xbox_snapshot.h) ----------------------------------
++ * While a save or load copies guest RAM, no other guest thread may run guest
++ * code or a kernel call that writes guest memory. Spawned guest threads are
++ * counted while they run guest code; they stop counting inside the calls
++ * that only wait (sleeps, waits, critical sections), and with the gate up a
++ * thread coming back from any kernel call parks before it returns to guest
++ * code. The gate holder waits for the count to reach zero. */
++static volatile LONG g_snap_gate, g_snap_running;
++static RECOMP_TLS int s_snap_counted;
++static int snap_waits(ULONG ordinal)
++{
++    switch (ordinal) {
++    case 99:  /* KeDelayExecutionThread */
++    case 158: case 159:  /* KeWaitForMultipleObjects / KeWaitForSingleObject */
++    case 233: case 234: case 235:  /* NtWaitForSingleObject(Ex) / NtWaitForMultipleObjectsEx */
++    case 238:  /* NtYieldExecution */
++    case 277:  /* RtlEnterCriticalSection */
++        return 1;
++    }
++    return 0;
++}
++static void snap_thread_join(void) { s_snap_counted = 1; InterlockedIncrement(&g_snap_running); }
++static void snap_thread_part(void) { if (s_snap_counted) { s_snap_counted = 0; InterlockedDecrement(&g_snap_running); } }
++int xbox_snap_gate(int on, int timeout_ms)
++{
++    int i;
++    if (!on) { InterlockedExchange(&g_snap_gate, 0); return 1; }
++    InterlockedExchange(&g_snap_gate, 1);
++    for (i = 0; i < timeout_ms; i++) {
++        if (InterlockedCompareExchange(&g_snap_running, 0, 0) <= 0) return 1;
++        Sleep(1);
++    }
++    return 0;
++}
++
+ /* A guest thread lets go of the guest CPU for the length of every kernel
+  * call, and takes it back when it had it. A guest routine a bridge runs (an
+  * APC, an unwind handler) makes its own kernel calls through here too: they
+@@ -10793,10 +10939,19 @@ void guest_cpu_part(void)
+ static void kernel_thunk_dispatch(void)
+ {
+     int slot = g_kernel_dispatch_slot;
+-    int held = xbox_GuestCpuRelease(XBOX_GUEST_CPU_KERNEL,
+-                                    slot >= 0 && slot < XBOX_KERNEL_THUNK_TABLE_SIZE
+-                                    ? g_slot_ordinals[slot] : 0);
++    ULONG ord = slot >= 0 && slot < XBOX_KERNEL_THUNK_TABLE_SIZE ? g_slot_ordinals[slot] : 0;
++    int held = xbox_GuestCpuRelease(XBOX_GUEST_CPU_KERNEL, ord);
++    int waits = s_snap_counted && snap_waits(ord);
++    if (waits) InterlockedDecrement(&g_snap_running);
+     kernel_thunk_dispatch_body();
++    if (s_snap_counted) {
++        if (InterlockedCompareExchange(&g_snap_gate, 0, 0)) {
++            if (!waits) InterlockedDecrement(&g_snap_running);
++            while (InterlockedCompareExchange(&g_snap_gate, 0, 0)) Sleep(1);
++            InterlockedIncrement(&g_snap_running);
++        } else if (waits)
++            InterlockedIncrement(&g_snap_running);
++    }
+     if (held)
+         xbox_GuestCpuAcquire();
+ }
+diff --git a/src/kernel/kernel_hal.c b/src/kernel/kernel_hal.c
+index 45d548c..9d90fdb 100644
+--- a/src/kernel/kernel_hal.c
++++ b/src/kernel/kernel_hal.c
+@@ -1125,6 +1125,10 @@ VOID __stdcall xbox_KeQuerySystemTime(PLARGE_INTEGER CurrentTime)
+ 
+     if (!CurrentTime)
+         return;
++    {
++        extern int64_t (*xbox_det_systime_hook)(void);
++        if (xbox_det_systime_hook) { CurrentTime->QuadPart = xbox_det_systime_hook(); return; }
++    }
+ 
+     InitOnceExecuteOnce(&s_time_once, anchor_system_time, NULL, NULL);
+     QueryPerformanceCounter(&now);
+@@ -1774,9 +1778,20 @@ ULONGLONG __stdcall xbox_KeQueryInterruptTime(void)
+  * ========================================================================= */
+ #define XBOX_TSC_HZ 733333333ull
+ 
++/* Deterministic time (project hook, default NULL): when a project installs
++ * these, rdtsc and KeQuerySystemTime return what they say instead of host
++ * time, so two runs of the same input see the same clock. KeTickCount is
++ * left alone by the timer thread while xbox_det_time is set (the project
++ * writes it). */
++uint64_t (*xbox_det_tsc_hook)(void);
++int64_t (*xbox_det_systime_hook)(void);
++volatile int xbox_det_time;
++
+ uint64_t xbox_ReadTimeStampCounter(void)
+ {
+     static LARGE_INTEGER freq;
++    if (xbox_det_tsc_hook)
++        return xbox_det_tsc_hook();
+     static LARGE_INTEGER origin;
+     LARGE_INTEGER now;
+ 
+diff --git a/src/kernel/kernel_path.c b/src/kernel/kernel_path.c
+index 2f1edbb..306969d 100644
+--- a/src/kernel/kernel_path.c
++++ b/src/kernel/kernel_path.c
+@@ -373,6 +373,10 @@ int xbox_path_tree(const char *xbox_path)
+     return XBOX_TREE_UNKNOWN;
+ }
+ 
++/* Host folder whose files replace game-disc files of the same relative path (a mods folder);
++ * empty = off. Set by the title port before the first open. */
++char g_xbox_overlay_dir[1024];
++
+ #if defined(_WIN32)
+ /* ======================================================================== */
+ 
+@@ -641,6 +645,17 @@ translate:
+             CreateDirectoryW(dir_path, NULL);
+         } else {
+             swprintf_s(host_path_buf, buf_size, L"%s\\%s", base_dir, remainder_wide);
++            /* Overlay folder (mods): a game-disc file present there is opened instead. */
++            if (g_xbox_overlay_dir[0] && base_dir == s_game_dir && remainder_wide[0]) {
++                WCHAR ov[MAX_PATH * 2];
++                DWORD a;
++                swprintf_s(ov, MAX_PATH * 2, L"%S\\%s", g_xbox_overlay_dir, remainder_wide);
++                a = GetFileAttributesW(ov);
++                if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY)) {
++                    swprintf_s(host_path_buf, buf_size, L"%s", ov);
++                    fprintf(stderr, "  [MODDIR] %s -> %S\n", xbox_path, ov);
++                }
++            }
+         }
+ 
+         /* An empty remainder means the title opened the device itself, so
+@@ -671,6 +686,49 @@ translate:
+ #include <errno.h>
+ #include <fcntl.h>
+ 
++
++#include <dirent.h>
++#include <strings.h>
++/* Case-insensitive resolution of a translated host path (POSIX hosts).
++ * Xbox file systems ignore case; titles open "Data\\FOO.BIN" for a file the
++ * disc stores as "data/foo.bin". Each component past `keep` that does not
++ * exist as spelled is replaced by the first directory entry matching it
++ * case-insensitively. Components with no match are left as they are, so a
++ * create still lands under the title's spelling. */
++static void ci_resolve_path(char *path, size_t keep)
++{
++    struct stat st;
++    char *p;
++    if (stat(path, &st) == 0)
++        return;
++    p = path + keep;
++    while (*p == '/') p++;
++    while (*p) {
++        char *end = strchr(p, '/');
++        char saved = end ? *end : 0;
++        if (end) *end = 0;
++        if (stat(path, &st) != 0) {
++            char *slash = p - 1;
++            DIR *d;
++            *slash = 0;
++            d = opendir(slash == path ? "/" : path);
++            *slash = '/';
++            if (d) {
++                struct dirent *de;
++                while ((de = readdir(d)) != NULL) {
++                    if (strlen(de->d_name) == strlen(p) && strcasecmp(de->d_name, p) == 0) {
++                        memcpy(p, de->d_name, strlen(p));
++                        break;
++                    }
++                }
++                closedir(d);
++            }
++        }
++        if (!end) break;
++        *end = saved;
++        p = end + 1;
++    }
++}
+ static char s_game_dir[MAX_PATH];
+ static char s_save_dir[MAX_PATH];
+ static char s_user_dir[MAX_PATH];   /* UDATA/TDATA/TitleCache root: s_save_dir or RECOMP_SAVE_DIR */
+@@ -883,6 +941,17 @@ translate:
+             mkdir_p(dir_path);
+         } else {
+             snprintf(host_path_buf, buf_size, "%s/%s", base_dir, remainder_posix);
++            if (g_xbox_overlay_dir[0] && base_dir == s_game_dir && remainder_posix[0]) {
++                char ov[MAX_PATH * 2];
++                struct stat ost;
++                snprintf(ov, sizeof ov, "%s/%s", g_xbox_overlay_dir, remainder_posix);
++                ci_resolve_path(ov, strlen(g_xbox_overlay_dir));
++                if (stat(ov, &ost) == 0 && S_ISREG(ost.st_mode)) {
++                    snprintf(host_path_buf, buf_size, "%s", ov);
++                    fprintf(stderr, "  [MODDIR] %s -> %s\n", xbox_path, ov);
++                    base_dir = g_xbox_overlay_dir;
++                }
++            }
+         }
+ 
+         {
+@@ -891,6 +960,7 @@ translate:
+                 host_path_buf[--n] = '\0';
+         }
+ 
++        ci_resolve_path(host_path_buf, strlen(base_dir));
+         XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
+         /* As the Win32 backend does: the bridge reads back the host path
+          * the call it just made translated (the missing-file report, the
+diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
+index 327f01d..9d49988 100644
+--- a/src/kernel/nv2a_backend.h
++++ b/src/kernel/nv2a_backend.h
+@@ -29,6 +29,8 @@
+ 
+ #include <stdint.h>
+ 
++#include "nv2a_combiner.h"
++
+ /* The colour surface being drawn into, in real (anti-aliased) pixels.
+  * aa_sx/aa_sy give the anti-aliasing factor, so width/aa_sx is the logical
+  * size the title thinks it renders at (e.g. 640x480). */
+@@ -38,6 +40,14 @@ typedef struct {
+     uint32_t pitch;             /* bytes per row */
+     uint32_t bytes_per_pixel;   /* 2 or 4 */
+     uint32_t aa_sx, aa_sy;      /* 1 or 2 each */
++    /* Patch 0010: the clip rectangle's origin (real pixels). The NV2A draws
++     * and clears nothing outside [clip_x, clip_x + width) x [clip_y,
++     * clip_y + height); a HUD widget drawn through a small clip relies on it. */
++    uint32_t clip_x, clip_y;
++    /* SET_SURFACE_FORMAT as programmed: colour format in bits 0-3
++     * (X8R8G8B8_Z8R8G8B8 4 and X1R5G5B5_Z1R5G5B5 1 store alpha 0, the _O8/_O1
++     * forms 5 and 2 store 1, A8R8G8B8 8 stores what the draw wrote). */
++    uint32_t format;
+ } Nv2aSurface;
+ 
+ /* A texture as the title programmed it. uv in Nv2aVertex are in texels. */
+@@ -51,6 +61,11 @@ typedef struct {
+      * a linear texture) and the raw SET_TEXTURE_FILTER word (MIN in bits
+      * 16-23). A back end that ignores them samples level 0. */
+     uint32_t levels, filter;
++    /* Patch 0010: SET_TEXTURE_CONTROL0 (MAX_ANISOTROPY log2 in bits 4-5,
++     * MAX_LOD_CLAMP bits 6-17 and MIN_LOD_CLAMP bits 18-29, 4.8 fixed point),
++     * SET_TEXTURE_BORDER_COLOR (0xAARRGGBB) and FORMAT's BORDER_SOURCE
++     * (1: addressing mode 4 reads `border`), FORMAT's CUBEMAP bit. */
++    uint32_t control0, border, border_color, cube;
+ } Nv2aTexture;
+ 
+ typedef struct {
+@@ -80,13 +95,79 @@ typedef struct {
+      * that ignores these draws that pass over the whole surface. */
+     uint32_t stencil_enable, stencil_func, stencil_ref, stencil_func_mask;
+     uint32_t stencil_write_mask, stencil_fail, stencil_zfail, stencil_zpass;
++    /* Patch 0010. SET_WINDOW_CLIP_TYPE (bit 0: exclusive) and the eight
++     * SET_WINDOW_CLIP_HORIZONTAL/VERTICAL words (min in bits 0-11, max in
++     * 16-27, inclusive, logical pixels before the AA scale): D3D's
++     * SetScissors. Inclusive: a pixel is drawn only inside one of the
++     * rectangles; exclusive: only outside all of them. */
++    uint32_t window_clip_type, window_clip_x[8], window_clip_y[8];
++    /* SET_POLY_OFFSET_FILL_ENABLE, SET_POLYGON_OFFSET_SCALE_FACTOR/BIAS
++     * (floats), SET_CONTROL0 (bit 0 stencil write enable, W-buffer and
++     * Z-format bits). */
++    uint32_t poly_offset_fill;
++    float    poly_offset_factor, poly_offset_units;
++    uint32_t control0;
++    /* SET_CLEAR_RECT_HORIZONTAL/VERTICAL (x0 | x1 << 16, inclusive, real
++     * pixels) and whether both have been sent (clear_rect_set == 3): the
++     * area CLEAR_SURFACE covers. */
++    uint32_t clear_rect_h, clear_rect_v, clear_rect_set;
+ } Nv2aRenderState;
+ 
++/* Per-vertex data beyond Nv2aVertex for a back end that runs the register
++ * combiners itself (one entry per vertex, same order). tc are the program's
++ * oT0..oT3 as written (normalised for swizzled/DXT textures, texels for
++ * linear ones, q in [3]); fog is the fog unit's factor (1: no fog). */
++typedef struct {
++    uint32_t specular;          /* oD1, 0xAARRGGBB */
++    float    fog;
++    float    tc[4][4];
++} Nv2aVertexExt;
++
++/* A vertex-program batch for a back end that runs the program itself
++ * (patch 0008; see vsh_accept below). The executor has fetched the inputs the
++ * back end asked for as float4 (all formats decoded as the CPU path does) and
++ * decomposed the primitive into a triangle list exactly as the CPU path does
++ * (odd strip triangles swap their first two vertices). Positions come out of
++ * the program in surface pixels with clip w, as on the CPU path; the back end
++ * applies the anti-aliasing scale, w = +0 -> 1, the near-plane clip
++ * (w >= 1e-3 and screen z >= clip_z) and the fog unit itself. */
++typedef struct {
++    const uint32_t (*program)[4];   /* start slot .. FINAL */
++    uint32_t ninstr;
++    const float (*constants)[4];    /* c[0..191] */
++    uint32_t array_mask;            /* inputs with per-vertex data in verts */
++    const float *verts;             /* nverts rows of popcount(array_mask) float4,
++                                       ascending attribute order */
++    uint32_t nverts;
++    float    inputs[16][4];         /* value of every other input */
++    const uint32_t *indices;        /* triangle list into verts; Nv2aBatch.count of them */
++    float    aa_sx, aa_sy;          /* program pixels -> surface pixels */
++    float    uv_scale[2];           /* oT0 -> stage 0 texels (Nv2aVertex.u/v convention) */
++    float    clip_z;                /* near plane in screen z (c[59].z) */
++    uint32_t fog_enable, fog_mode;  /* fog factor from oFog.x, as the CPU path */
++    float    fog_param[2];
++} Nv2aVshBatch;
++
+ typedef struct {
+     const Nv2aVertex  *vertices;    /* triangle list: count is a multiple of 3 */
+     uint32_t           count;
+     const Nv2aTexture *texture;     /* NULL: untextured */
+     const Nv2aRenderState *state;
++    /* Full pixel pipeline (patch 0007). ext: NULL for batches from the
++     * screen-space path. stages[i]: NULL when stage i is not usable. rc: NULL
++     * until the title has programmed the combiners (then "texture x diffuse"
++     * stands in, as for the CPU rasteriser). */
++    const Nv2aVertexExt *ext;
++    const Nv2aTexture *stages[4];
++    const Nv2aCombiner *rc;
++    uint32_t fog_color;             /* SET_FOG_COLOR: R in bits 0-7 */
++    uint32_t clip_plane_mode;       /* SET_SHADER_CLIP_PLANE_MODE */
++    /* Patch 0008. vsh: non-NULL for a batch the back end transforms itself
++     * (vertices and ext are then unused, count is the index count).
++     * vsh_twin: this batch is the CPU-path copy of the vsh batch just drawn
++     * (only when vsh_accept returned 2, an A/B diagnostic). */
++    const Nv2aVshBatch *vsh;
++    uint32_t vsh_twin;
+ } Nv2aBatch;
+ 
+ typedef struct {
+@@ -96,6 +177,21 @@ typedef struct {
+                   uint32_t flags, uint32_t argb, uint32_t zstencil);
+     void (*draw)(const Nv2aSurface *s, const Nv2aBatch *b);
+     void (*flip)(void);
++    /* Optional (patch 0008). Called for each vertex-program batch before the
++     * CPU transforms it: return 0 to have the executor run the program on the
++     * CPU as before, nonzero to take it, with *inputs set to the v0..v15 the
++     * program reads; the executor then calls draw() with Nv2aBatch.vsh set.
++     * 2 also runs the CPU path and draws its result with vsh_twin = 1.
++     * cxt_write: the program may write c[] (SET_TRANSFORM_CONSTANT... CXT_WRITE_EN). */
++    int  (*vsh_accept)(const uint32_t (*program)[4], uint32_t ninstr,
++                       uint32_t cxt_write, uint32_t *inputs);
++    /* Optional (patch 0019). Visibility tests when a back end rasterises
++     * (the executor's software count never runs then): op 0 CLEAR_REPORT_VALUE,
++     * op 1 SET_ZPASS_PIXEL_COUNT_ENABLE (arg = enable), op 2 GET_REPORT
++     * (returns the pixels that passed the depth test since the last clear while
++     * counting was on). Without it, every visibility test reports 0 pixels,
++     * and a title culling with them skips visible objects for a frame. */
++    uint32_t (*zpass)(int op, uint32_t arg);
+ } Nv2aBackend;
+ 
+ /* Register (or, with NULL, remove) the back end. Call before the title starts
+@@ -107,6 +203,12 @@ void nv2a_backend_register(const Nv2aBackend *backend);
+  * Returns 0 if the format is not supported. */
+ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out);
+ 
++/* Patch 0010: mip level `lv` of a swizzled or DXT texture as a texture of
++ * its own (offset past the larger levels, size halved per level, at least 1,
++ * levels = 1), so nv2a_backend_decode_texture can decode it. Returns 0 for
++ * lv >= tex->levels or a linear texture (linear formats have no mips). */
++int nv2a_backend_texture_level(const Nv2aTexture *tex, uint32_t lv, Nv2aTexture *out);
++
+ /* Where BACK_END_WRITE_SEMAPHORE_RELEASE (0x1D70) values land: the guest VA
+  * of the semaphore the title reads GPU progress from (for XDK D3D, the
+  * pointer at device+0x30). The executor writes each release there once it
+diff --git a/src/kernel/nv2a_gpu_census.c b/src/kernel/nv2a_gpu_census.c
+new file mode 100644
+index 0000000..b0b0d98
+--- /dev/null
++++ b/src/kernel/nv2a_gpu_census.c
+@@ -0,0 +1,278 @@
++/*
++ * GPU census (RECOMP_GPU_CENSUS=<path>): an inventory of what a title asks
++ * the NV2A to do, for planning a hardware back end. Read-only: it shadows the
++ * methods the executor sees and never changes executor state. Unset, the
++ * cost is one cached test per method.
++ *
++ * Every 32 flips (and at RECOMP_GPU_CENSUS_EVERY flips) the whole inventory
++ * is rewritten to <path>:
++ *   M  subch method count first_flip last_param      every method
++ *   O  subch class_handle                              object bindings (method 0)
++ *   P  hash len draws first_flip                       vertex programs drawn with
++ *   R  hash stages draws first_flip control stage_prog   combiner configs drawn with
++ *   T  fmt dim cube levels w h pitch draws first_flip rtt   textures sampled
++ *   S  fmt pitch w h aa draws first_flip              colour surfaces drawn to
++ *   V  attr type size stride draws                    vertex attribute formats
++ *   D  prim draws mode                                primitive types / xform mode
++ *   X  key value                                      scalar counters
++ */
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++static int s_on = -1;
++static const char *s_path;
++static uint32_t s_every = 32;
++
++static uint32_t s_reg[0x2000 / 4];
++static uint32_t s_flips;
++
++/* methods: 8 subchannels x 2048 words */
++static uint32_t s_mcount[8][0x2000 / 4];
++static uint32_t s_mfirst[8][0x2000 / 4];
++static uint32_t s_mlast[8][0x2000 / 4];
++static uint32_t s_obj[8];
++
++/* vertex program shadow: 136 slots x 4 words */
++static uint32_t s_prog[136][4];
++static uint32_t s_prog_load;
++
++#define TBL 1024
++typedef struct { uint64_t key; uint32_t draws, first; uint32_t a[8]; } Ent;
++static Ent s_vp[TBL], s_rc[TBL], s_tex[TBL], s_surf[TBL], s_va[TBL], s_prim[TBL];
++static uint32_t s_nvp, s_nrc, s_ntex, s_nsurf, s_nva, s_nprim;
++
++/* colour surface addresses drawn to (for render-to-texture detection) */
++static uint32_t s_rt[256];
++static uint32_t s_nrt;
++
++static uint64_t s_draws, s_draws_prog, s_draws_ffp, s_rtt_draws, s_tex_draws;
++static uint64_t s_inline_words, s_index_words, s_imm_words, s_prog_words, s_const_words;
++
++static uint64_t fnv(const void *p, size_t n, uint64_t h)
++{
++    const uint8_t *b = (const uint8_t *)p;
++    while (n--) { h ^= *b++; h *= 0x100000001B3ull; }
++    return h;
++}
++
++static Ent *bump(Ent *t, uint32_t *n, uint64_t key)
++{
++    uint32_t i;
++    for (i = 0; i < *n; i++)
++        if (t[i].key == key) { t[i].draws++; return &t[i]; }
++    if (*n >= TBL)
++        return NULL;
++    t[*n].key = key; t[*n].draws = 1; t[*n].first = s_flips;
++    return &t[(*n)++];
++}
++
++#define R(m) s_reg[(m) / 4]
++
++static void dump(void)
++{
++    FILE *f;
++    uint32_t s, m, i;
++    char tmp[1024];
++
++    snprintf(tmp, sizeof tmp, "%s.tmp", s_path);
++    if (!(f = fopen(tmp, "w")))
++        return;
++    fprintf(f, "X flips %u\nX draws %llu\nX draws_program %llu\nX draws_ffp %llu\n"
++            "X draws_textured %llu\nX draws_rtt %llu\nX inline_words %llu\n"
++            "X index_words %llu\nX immediate_words %llu\nX program_words %llu\n"
++            "X constant_words %llu\n", s_flips,
++            (unsigned long long)s_draws, (unsigned long long)s_draws_prog,
++            (unsigned long long)s_draws_ffp, (unsigned long long)s_tex_draws,
++            (unsigned long long)s_rtt_draws, (unsigned long long)s_inline_words,
++            (unsigned long long)s_index_words, (unsigned long long)s_imm_words,
++            (unsigned long long)s_prog_words, (unsigned long long)s_const_words);
++    for (s = 0; s < 8; s++)
++        if (s_obj[s])
++            fprintf(f, "O %u 0x%08X\n", s, s_obj[s]);
++    for (s = 0; s < 8; s++)
++        for (m = 0; m < 0x2000 / 4; m++)
++            if (s_mcount[s][m])
++                fprintf(f, "M %u 0x%04X %u %u 0x%08X\n", s, m * 4,
++                        s_mcount[s][m], s_mfirst[s][m], s_mlast[s][m]);
++    for (i = 0; i < s_nvp; i++)
++        fprintf(f, "P %016llx %u %u %u\n", (unsigned long long)s_vp[i].key,
++                s_vp[i].a[0], s_vp[i].draws, s_vp[i].first);
++    for (i = 0; i < s_nrc; i++)
++        fprintf(f, "R %016llx %u %u %u 0x%08X 0x%08X\n", (unsigned long long)s_rc[i].key,
++                s_rc[i].a[0], s_rc[i].draws, s_rc[i].first, s_rc[i].a[1], s_rc[i].a[2]);
++    for (i = 0; i < s_ntex; i++)
++        fprintf(f, "T 0x%02X %u %u %u %u %u %u %u %u %u\n", s_tex[i].a[0], s_tex[i].a[1],
++                s_tex[i].a[2], s_tex[i].a[3], s_tex[i].a[4], s_tex[i].a[5], s_tex[i].a[6],
++                s_tex[i].draws, s_tex[i].first, s_tex[i].a[7]);
++    for (i = 0; i < s_nsurf; i++)
++        fprintf(f, "S 0x%08X %u %u %u %u %u %u 0x%08X\n", s_surf[i].a[0], s_surf[i].a[1],
++                s_surf[i].a[2], s_surf[i].a[3], s_surf[i].a[4], s_surf[i].draws,
++                s_surf[i].first, s_surf[i].a[5]);
++    for (i = 0; i < s_nva; i++)
++        fprintf(f, "V %u %u %u %u %u\n", s_va[i].a[0], s_va[i].a[1], s_va[i].a[2],
++                s_va[i].a[3], s_va[i].draws);
++    for (i = 0; i < s_nprim; i++)
++        fprintf(f, "D %u %u %u\n", s_prim[i].a[0], s_prim[i].draws, s_prim[i].a[1]);
++    fclose(f);
++    rename(tmp, s_path);
++}
++
++static void on_draw(void)
++{
++    uint32_t mode = R(0x1E94) & 3, i, st;
++    uint32_t color_off = R(0x0210), sfmt = R(0x0208);
++    uint32_t stage_prog = R(0x1E70);
++    int rtt = 0, textured = 0;
++    Ent *e;
++
++    s_draws++;
++    if (mode == 2) {
++        /* program from SET_TRANSFORM_PROGRAM_START to the first final flag */
++        uint32_t start = R(0x1EA0), n = 0;
++        uint64_t h = 0xCBF29CE484222325ull;
++        for (i = start; i < 136; i++) {
++            h = fnv(s_prog[i], 16, h);
++            n++;
++            if (s_prog[i][3] & 1)
++                break;
++        }
++        if ((e = bump(s_vp, &s_nvp, h)))
++            e->a[0] = n;
++        s_draws_prog++;
++    } else {
++        s_draws_ffp++;
++    }
++    {
++        /* combiner config: everything but the constant colours */
++        uint32_t cfg[32], k = 0, ns = R(0x1E60) & 0xF;
++        uint64_t h;
++        for (i = 0; i < 8; i++) {
++            cfg[k++] = i < ns ? R(0x0260 + i * 4) : 0;   /* ALPHA_ICW */
++            cfg[k++] = i < ns ? R(0x0AC0 + i * 4) : 0;   /* COLOR_ICW */
++            cfg[k++] = i < ns ? R(0x0AA0 + i * 4) : 0;   /* ALPHA_OCW */
++        }
++        for (i = 0; i < 8; i++)
++            cfg[(i * 3 + 2)] ^= i < ns ? R(0x1E40 + i * 4) * 0x9E3779B1u : 0; /* COLOR_OCW */
++        cfg[24] = R(0x0288); cfg[25] = R(0x028C); cfg[26] = R(0x1E60);
++        cfg[27] = stage_prog; cfg[28] = R(0x1E78);
++        h = fnv(cfg, 29 * 4, 0xCBF29CE484222325ull);
++        if ((e = bump(s_rc, &s_nrc, h))) {
++            e->a[0] = ns; e->a[1] = R(0x1E60); e->a[2] = stage_prog;
++        }
++    }
++    for (st = 0; st < 4; st++) {
++        uint32_t base = 0x1B00 + st * 0x40;
++        uint32_t ctl0 = R(base + 0x0C), fmt = R(base + 0x04);
++        uint32_t off = R(base), sm = (stage_prog >> (st * 5)) & 0x1F;
++        uint32_t color = (fmt >> 8) & 0xFF, w, h, pitch = R(base + 0x10) >> 16;
++        int is_rt = 0;
++        if (!(ctl0 & 0x40000000u) || sm == 0)
++            continue;
++        textured = 1;
++        if (pitch) { w = R(base + 0x1C) >> 16; h = R(base + 0x1C) & 0xFFFF; }
++        else { w = 1u << ((fmt >> 20) & 0xF); h = 1u << ((fmt >> 24) & 0xF); }
++        for (i = 0; i < s_nrt; i++)
++            if ((s_rt[i] & 0x03FFFFFFu) == (off & 0x03FFFFFFu)) { is_rt = 1; break; }
++        if (is_rt) rtt = 1;
++        {
++            uint64_t key = ((uint64_t)color << 56) ^ ((uint64_t)((fmt >> 4) & 0xF) << 52)
++                         ^ ((uint64_t)((fmt >> 2) & 1) << 51) ^ ((uint64_t)((fmt >> 16) & 0xF) << 44)
++                         ^ ((uint64_t)w << 28) ^ ((uint64_t)h << 12) ^ pitch ^ ((uint64_t)is_rt << 50)
++                         ^ ((uint64_t)sm << 40);
++            if ((e = bump(s_tex, &s_ntex, key))) {
++                e->a[0] = color; e->a[1] = (fmt >> 4) & 0xF; e->a[2] = (fmt >> 2) & 1;
++                e->a[3] = (fmt >> 16) & 0xF; e->a[4] = w; e->a[5] = h; e->a[6] = pitch;
++                e->a[7] = is_rt | (sm << 8);
++            }
++        }
++    }
++    if (textured) s_tex_draws++;
++    if (rtt) s_rtt_draws++;
++    {
++        uint32_t cw = R(0x0200) >> 16, ch = R(0x0204) >> 16;
++        uint64_t key = ((uint64_t)sfmt << 32) ^ (uint64_t)(R(0x020C) & 0xFFFF) ^ ((uint64_t)cw << 16)
++                     ^ ((uint64_t)ch << 40) ^ ((uint64_t)color_off * 0x9E3779B97F4A7C15ull);
++        if ((e = bump(s_surf, &s_nsurf, key))) {
++            e->a[0] = sfmt; e->a[1] = R(0x020C) & 0xFFFF; e->a[2] = cw; e->a[3] = ch;
++            e->a[4] = (sfmt >> 12) & 0xF; e->a[5] = color_off;
++        }
++        for (i = 0; i < s_nrt; i++)
++            if (s_rt[i] == color_off) break;
++        if (i == s_nrt && s_nrt < 256)
++            s_rt[s_nrt++] = color_off;
++    }
++    for (i = 0; i < 16; i++) {
++        uint32_t vf = R(0x1760 + i * 4);
++        uint32_t size = (vf >> 4) & 0xF;
++        if (!size) continue;
++        if ((e = bump(s_va, &s_nva, ((uint64_t)i << 32) | (vf & 0xFFFF)))) {
++            e->a[0] = i; e->a[1] = vf & 0xF; e->a[2] = size; e->a[3] = (vf >> 8) & 0xFF;
++        }
++    }
++    if ((e = bump(s_prim, &s_nprim, ((uint64_t)s_reg[0x17FC / 4] << 8) | mode))) {
++        e->a[0] = s_reg[0x17FC / 4]; e->a[1] = mode;
++    }
++}
++
++void nv2a_gpu_census_method(uint32_t subch, uint32_t method, uint32_t param)
++{
++    uint32_t w;
++
++    if (s_on == 0)
++        return;
++    if (s_on < 0) {
++        const char *e = getenv("RECOMP_GPU_CENSUS"), *ev;
++        s_on = e && *e;
++        if (!s_on)
++            return;
++        s_path = e;
++        if ((ev = getenv("RECOMP_GPU_CENSUS_EVERY")) && atoi(ev) > 0)
++            s_every = (uint32_t)atoi(ev);
++        fprintf(stderr, "  [CENSUS] GPU census -> %s every %u flips\n", s_path, s_every);
++    }
++    subch &= 7;
++    w = (method & 0x1FFCu) / 4;
++    if (!s_mcount[subch][w]++)
++        s_mfirst[subch][w] = s_flips;
++    s_mlast[subch][w] = param;
++    if (method == 0)
++        s_obj[subch] = param;
++    if (subch != 0)
++        return;
++
++    /* bulk data: counted, not shadowed as state */
++    if (method == 0x1818) { s_inline_words++; return; }
++    if (method == 0x1800 || method == 0x1808 || method == 0x1810) s_index_words++;
++    if (method >= 0x1500 && method < 0x1A80 && method != 0x17FC
++        && !(method >= 0x1800 && method < 0x1820)) s_imm_words++;
++    if (method >= 0x0B80 && method < 0x0C00) s_const_words++;
++
++    if (method >= 0x0B00 && method < 0x0B80) {
++        uint32_t c = ((method - 0x0B00) / 4) & 3;
++        if (s_prog_load < 136)
++            s_prog[s_prog_load][c] = param;
++        if (c == 3)
++            s_prog_load++;
++        s_prog_words++;
++        return;
++    }
++    if (method == 0x1E9C)
++        s_prog_load = param;
++    if (method == 0x17FC && param == 0)
++        on_draw();
++    s_reg[w] = param;
++    if (method == 0x012C) {   /* FLIP_INCREMENT_WRITE */
++        s_flips++;
++        if (s_flips % s_every == 0)
++            dump();
++    }
++}
++
++/* Called at exit or on demand. */
++void nv2a_gpu_census_flush(void)
++{
++    if (s_on > 0)
++        dump();
++}
+diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
+index a513bc7..dbf6cde 100644
+--- a/src/kernel/nv2a_pb_exec.c
++++ b/src/kernel/nv2a_pb_exec.c
+@@ -267,6 +267,7 @@ typedef struct {
+     uint32_t levels;                    /* mip levels, from FORMAT       */
+     uint32_t filter;                    /* SET_TEXTURE_FILTER            */
+     uint32_t border;                    /* SET_TEXTURE_BORDER_COLOR      */
++    uint32_t control0;                  /* SET_TEXTURE_CONTROL0 (aniso, LOD clamps) */
+     int      border_color;              /* FORMAT: BORDER reads `border` */
+     int      cube;                      /* FORMAT: six faces, not one    */
+     int      valid;
+@@ -774,6 +775,7 @@ static void surface_apply_clip(void)
+ /* ---- Render back end (nv2a_backend.h) ------------------------------- */
+ 
+ static const Nv2aBackend *s_backend;
++uint32_t g_nv2a_flip_front_va;   /* guest VA of the buffer the current flip shows (0: unknown) */
+ 
+ void nv2a_backend_register(const Nv2aBackend *backend)
+ {
+@@ -794,6 +796,9 @@ static void current_surface(Nv2aSurface *out)
+     out->bytes_per_pixel = surface_bpp();
+     out->aa_sx           = s_gpu.aa_sx > 1.5f ? 2 : 1;
+     out->aa_sy           = s_gpu.aa_sy > 1.5f ? 2 : 1;
++    out->clip_x          = s_gpu.clip_x;
++    out->clip_y          = s_gpu.clip_y;
++    out->format          = s_gpu.format;
+ }
+ 
+ /* Render state in the NV2A's own values, gathered from what the executor
+@@ -827,6 +832,21 @@ static void current_render_state(Nv2aRenderState *r)
+     r->stencil_fail      = s_reg[0x0370 / 4];        /* SET_STENCIL_OP_FAIL */
+     r->stencil_zfail     = s_reg[0x0374 / 4];        /* SET_STENCIL_OP_ZFAIL */
+     r->stencil_zpass     = s_reg[0x0378 / 4];        /* SET_STENCIL_OP_ZPASS */
++    {
++        int i;
++        r->window_clip_type = s_reg[0x02B4 / 4];      /* SET_WINDOW_CLIP_TYPE */
++        for (i = 0; i < 8; i++) {
++            r->window_clip_x[i] = s_reg[(0x02C0 + 4 * i) / 4];
++            r->window_clip_y[i] = s_reg[(0x02E0 + 4 * i) / 4];
++        }
++    }
++    r->poly_offset_fill   = s_reg[0x0318 / 4];       /* SET_POLY_OFFSET_FILL_ENABLE */
++    r->poly_offset_factor = reg_f(0x0384);           /* SET_POLYGON_OFFSET_SCALE_FACTOR */
++    r->poly_offset_units  = reg_f(0x0388);           /* SET_POLYGON_OFFSET_BIAS */
++    r->control0           = s_reg[0x0290 / 4];       /* SET_CONTROL0 */
++    r->clear_rect_h       = s_gpu.clear_rect_h;
++    r->clear_rect_v       = s_gpu.clear_rect_v;
++    r->clear_rect_set     = (uint32_t)s_gpu.clear_rect_set;
+ }
+ 
+ static int sample_texture(uint32_t u, uint32_t v, uint32_t *argb);
+@@ -884,9 +904,42 @@ static void surface_swizzle_update(void)
+                            &s_swz_mx, &s_swz_my);
+ }
+ 
++/* SET_COLOR_CLEAR_VALUE is in the colour surface's own format (xemu
++ * pgraph_get_clear_color): XDK D3D's Clear converts the D3DCOLOR to the
++ * render target's format before writing it. A 16-bit target is cleared with a
++ * 16-bit value -- PCJ clears its 256x256 R5G6B5 light target with 0x0000FFFF,
++ * which is 5:6:5 white; read as A8R8G8B8 it is cyan with alpha 0, and every
++ * lit surface in level 1 came out teal. Returns the value as A8R8G8B8. */
++static uint32_t clear_argb(void)
++{
++    uint32_t c = s_gpu.clear_color, r, g, b;
++    static int raw = -1;
++    if (raw < 0) {
++        const char *e = getenv("RECOMP_CLEAR_RAW");    /* =1: the old reading */
++        raw = e && e[0] == '1';
++    }
++    if (raw)
++        return c;
++    switch (s_gpu.format & 0xF) {
++    case 0x1: case 0x2:                                 /* X1R5G5B5 */
++        r = (c >> 10) & 0x1F; g = (c >> 5) & 0x1F; b = c & 0x1F;
++        return 0xFF000000u | (d3d8_expand_channel(r, 5) << 16)
++             | (d3d8_expand_channel(g, 5) << 8) | d3d8_expand_channel(b, 5);
++    case 0x3:                                           /* R5G6B5 */
++        r = (c >> 11) & 0x1F; g = (c >> 5) & 0x3F; b = c & 0x1F;
++        return 0xFF000000u | (d3d8_expand_channel(r, 5) << 16)
++             | (d3d8_expand_channel(g, 6) << 8) | d3d8_expand_channel(b, 5);
++    case 0xA:                                           /* G8B8 */
++        return 0xFF000000u | (c & 0xFFFFu);
++    default:                                            /* 32-bit: A8R8G8B8 */
++        return c;
++    }
++}
++
+ static void clear_surface(uint32_t param)
+ {
+     uint8_t *mem = (uint8_t *)xbox_GetMemoryOffset();
++    const uint32_t cc = clear_argb();
+     uint32_t bpp = surface_bpp();
+     uint32_t y, x;
+ 
+@@ -900,7 +953,7 @@ static void clear_surface(uint32_t param)
+             return;
+         current_surface(&surf);
+         current_render_state(&rs);
+-        s_backend->clear(&surf, &rs, param, s_gpu.clear_color,
++        s_backend->clear(&surf, &rs, param, cc,
+                          s_gpu.zstencil_clear);
+         s_gpu.clears++;
+         return;
+@@ -929,9 +982,9 @@ static void clear_surface(uint32_t param)
+         uint32_t sh = 1u << ((s_gpu.format >> 24) & 0xF);
+         uint32_t x0 = s_gpu.clip_x, x1 = s_gpu.clip_x + s_gpu.clip_w;
+         uint32_t y0 = s_gpu.clip_y, y1 = s_gpu.clip_y + s_gpu.clip_h;
+-        uint16_t v16 = (uint16_t)(((s_gpu.clear_color >> 8) & 0xF800)
+-                                | ((s_gpu.clear_color >> 5) & 0x07E0)
+-                                | ((s_gpu.clear_color >> 3) & 0x001F));
++        uint16_t v16 = (uint16_t)(((cc >> 8) & 0xF800)
++                                | ((cc >> 5) & 0x07E0)
++                                | ((cc >> 3) & 0x001F));
+         if ((s_gpu.clear_rect_set & 3) == 3) {
+             x0 = s_gpu.clear_rect_h & 0xFFFF; x1 = (s_gpu.clear_rect_h >> 16) + 1;
+             y0 = s_gpu.clear_rect_v & 0xFFFF; y1 = (s_gpu.clear_rect_v >> 16) + 1;
+@@ -942,7 +995,7 @@ static void clear_surface(uint32_t param)
+             for (x = x0; x < x1; x++) {
+                 size_t i = swizzle_deposit(x, s_swz_mx) | swizzle_deposit(y, s_swz_my);
+                 if (bpp == 4)
+-                    ((uint32_t *)base)[i] = s_gpu.clear_color;
++                    ((uint32_t *)base)[i] = cc;
+                 else if (bpp == 2)
+                     ((uint16_t *)base)[i] = v16;
+             }
+@@ -953,13 +1006,12 @@ static void clear_surface(uint32_t param)
+         if (bpp == 4) {
+             uint32_t *p = (uint32_t *)row + s_gpu.clip_x;
+             for (x = 0; x < s_gpu.clip_w; x++)
+-                p[x] = s_gpu.clear_color;
++                p[x] = cc;
+         } else if (bpp == 2) {
+-            /* The clear value is always given as A8R8G8B8; a 16-bit surface
+-             * takes the same colour reduced to 5:6:5. */
+-            uint16_t v = (uint16_t)(((s_gpu.clear_color >> 8) & 0xF800)
+-                                  | ((s_gpu.clear_color >> 5) & 0x07E0)
+-                                  | ((s_gpu.clear_color >> 3) & 0x001F));
++            /* cc is A8R8G8B8 (clear_argb); back to 5:6:5 exactly. */
++            uint16_t v = (uint16_t)(((cc >> 8) & 0xF800)
++                                  | ((cc >> 5) & 0x07E0)
++                                  | ((cc >> 3) & 0x001F));
+             uint16_t *p = (uint16_t *)row + s_gpu.clip_x;
+             for (x = 0; x < s_gpu.clip_w; x++)
+                 p[x] = v;
+@@ -1995,20 +2047,32 @@ static int s_xf_no_tex;
+  * dropped. */
+ #define NV_BACKEND_MAX_VERTS (NV_MAX_INDICES * 3)
+ static Nv2aVertex *s_bverts;     /* about 5.5 MB: allocated by the first vertex */
++static Nv2aVertexExt *s_bext;    /* parallel: the program path's full outputs */
++static int        s_bext_ok;     /* every vertex in the batch has its ext */
+ static uint32_t   s_bcount;
++static const Nv2aVshBatch *s_bvsh;   /* patch 0008: backend_flush of a vsh batch */
++static uint32_t   s_bvsh_twin;
+ 
+ static Nv2aVertex *backend_slot(void)
+ {
+     if (!s_bverts
+         && !(s_bverts = (Nv2aVertex *)calloc(NV_BACKEND_MAX_VERTS, sizeof *s_bverts)))
+         return NULL;
++    if (!s_bext
++        && !(s_bext = (Nv2aVertexExt *)calloc(NV_BACKEND_MAX_VERTS, sizeof *s_bext)))
++        return NULL;
++    if (!s_bcount)
++        s_bext_ok = 1;
+     if (s_bcount + 3 > NV_BACKEND_MAX_VERTS)
+         return NULL;
+     return &s_bverts[s_bcount];
+ }
+ 
++static float fog_factor(float d);
++
+ static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
+ {
++    Nv2aVertexExt *e = &s_bext[o - s_bverts];
+     float su = 1.0f, sv = 1.0f;
+ 
+     if (tex_size_from_format(s_gpu.texs[0].color)) {
+@@ -2022,6 +2086,9 @@ static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
+     o->diffuse = pack_color(v->d0);
+     o->u = v->tex[0][0] * su;
+     o->v = v->tex[0][1] * sv;
++    e->specular = pack_color(v->d1);
++    e->fog = fog_factor(v->fog[0]);
++    memcpy(e->tc, v->tex, sizeof e->tc);
+ }
+ 
+ /* `textured`: the batch carried texture coordinates, so the bound texture is
+@@ -2030,11 +2097,13 @@ static void backend_flush(int textured)
+ {
+     Nv2aSurface surf;
+     Nv2aRenderState rs;
+-    Nv2aTexture tex;
++    Nv2aTexture tex, stex[4];
+     Nv2aBatch batch;
++    int st;
+ 
+     if (!s_bcount)
+         return;
++    memset(&batch, 0, sizeof batch);
+     current_surface(&surf);
+     current_render_state(&rs);
+     batch.vertices = s_bverts;
+@@ -2051,9 +2120,41 @@ static void backend_flush(int textured)
+         tex.addr_v = s_gpu.texs[0].addr_v;
+         tex.levels = s_gpu.texs[0].pitch ? 1 : s_gpu.texs[0].levels;
+         tex.filter = s_gpu.texs[0].filter;
++        tex.control0 = s_gpu.texs[0].control0;
++        tex.border = s_gpu.texs[0].border;
++        tex.border_color = (uint32_t)s_gpu.texs[0].border_color;
++        tex.cube = (uint32_t)s_gpu.texs[0].cube;
+         batch.texture = &tex;
+     }
++    batch.ext = s_bext_ok ? s_bext : NULL;
++    for (st = 0; st < 4; st++) {
++        const Texture *t = &s_gpu.texs[st];
++        if (!t->valid)
++            continue;
++        stex[st].offset = t->offset;
++        stex[st].width  = t->width;
++        stex[st].height = t->height;
++        stex[st].pitch  = t->pitch;
++        stex[st].color  = t->color;
++        stex[st].addr_u = t->addr_u;
++        stex[st].addr_v = t->addr_v;
++        stex[st].levels = t->pitch ? 1 : t->levels;
++        stex[st].filter = t->filter;
++        stex[st].control0 = t->control0;
++        stex[st].border = t->border;
++        stex[st].border_color = (uint32_t)t->border_color;
++        stex[st].cube = (uint32_t)t->cube;
++        batch.stages[st] = &stex[st];
++    }
++    batch.rc = s_gpu.rc_seen ? &s_gpu.rc : NULL;
++    batch.fog_color = s_gpu.fog_color;
++    batch.clip_plane_mode = s_gpu.clip_plane_mode;
++    batch.vsh = s_bvsh;
++    batch.vsh_twin = s_bvsh_twin;
++    if (s_bvsh)
++        batch.ext = NULL;
+     s_backend->draw(&surf, &batch);
++    s_bvsh_twin = 0;
+     s_gpu.tris_drawn += s_bcount / 3;
+     s_bcount = 0;
+     note_drawn();
+@@ -2098,6 +2199,7 @@ static void raster_indexed(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t argb)
+             o[k].u = textured ? uv[k][0] : 0.0f;
+             o[k].v = textured ? uv[k][1] : 0.0f;
+         }
++        s_bext_ok = 0;
+         s_bcount += 3;
+         return;
+     }
+@@ -2233,6 +2335,25 @@ static uint32_t tex_face_stride(const Texture *t)
+     return (total + 127u) & ~127u;
+ }
+ 
++int nv2a_backend_texture_level(const Nv2aTexture *tex, uint32_t lv, Nv2aTexture *out)
++{
++    uint32_t block = d3d8_format_dxt_block_bytes(tex->color), i, off = 0;
++    if (!tex_size_from_format(tex->color) || lv >= (tex->levels ? tex->levels : 1))
++        return 0;
++    for (i = 0; i < lv; i++) {
++        uint32_t lw = (tex->width >> i) ? (tex->width >> i) : 1;
++        uint32_t lh = (tex->height >> i) ? (tex->height >> i) : 1;
++        off += block ? ((lw + 3) / 4) * ((lh + 3) / 4) * block
++                     : lw * lh * tex_texel_bytes(tex->color);
++    }
++    *out = *tex;
++    out->offset = tex->offset + off;
++    out->width = (tex->width >> lv) ? (tex->width >> lv) : 1;
++    out->height = (tex->height >> lv) ? (tex->height >> lv) : 1;
++    out->levels = 1;
++    return 1;
++}
++
+ /* One texel at normalised (swizzled/DXT) or texel (linear) coordinates, as
+  * floats. An unusable stage reads white, so a missing texture multiplies
+  * through instead of blacking the pixel out. */
+@@ -2899,8 +3020,13 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
+          * so an attribute nobody set still reads the old default. */
+         if (!s_gpu.attr[a].size && a < NV_VERTEX_ATTRS)
+             memcpy(in[a], s_gpu.imm_attr[a], sizeof in[a]);
+-        else
+-            fetch_attr(&s_gpu.attr[a], index, in[a]);   /* absent: 0,0,0,1 */
++        else if (!fetch_attr(&s_gpu.attr[a], index, in[a]) && getenv("RECOMP_FETCH_DIAG")) {
++            static unsigned nfail;
++            if (nfail++ < 40 || nfail % 100000 == 0)
++                fprintf(stderr, "[FETCHFAIL] #%u attr %u idx %u off %08X type %u size %u stride %u inline %d\n",
++                        nfail, a, index, s_gpu.attr[a].offset, s_gpu.attr[a].type, s_gpu.attr[a].size,
++                        s_gpu.attr[a].stride, s_gpu.inline_active);
++        }
+     }
+     if (!nv2a_vsh_run((const float (*)[4])in, out))
+         return 0;
+@@ -2927,10 +3053,148 @@ static void xf_set_viewport(void)
+     s_xf_o[2] = of[2];
+ }
+ 
++/* Patch 0008: hand a vertex-program batch to a back end that runs the
++ * program itself. Returns 1 if the back end took it, 2 if it took it and also
++ * wants the CPU path's result (A/B diagnostic), 0 to transform on the CPU. */
++static float   *s_vb_verts;
++static uint32_t s_vb_verts_cap;
++static uint32_t *s_vb_idx;
++
++static int backend_vsh_batch(void)
++{
++    static Nv2aVshBatch vb;
++    const uint32_t (*prog)[4];
++    uint32_t ninstr, inputs = 0, n = s_gpu.idx_count, i, a, lo, hi, rows, nidx = 0;
++    uint32_t amask = 0, na = 0, attrs[NV_VERTEX_ATTRS];
++    int r, ranged;
++    size_t need;
++
++    if (!s_backend || !s_backend->vsh_accept || !s_backend->draw)
++        return 0;
++    if (!(prog = nv2a_vsh_program(&ninstr)))
++        return 0;
++    r = s_backend->vsh_accept(prog, ninstr, nv2a_vsh_cxt_write(), &inputs);
++    if (!r)
++        return 0;
++    memset(&vb, 0, sizeof vb);
++    for (a = 0; a < NV2A_VSH_INPUTS; a++) {
++        if (!(inputs & (1u << a)))
++            continue;
++        if (a < NV_VERTEX_ATTRS && !s_gpu.attr[a].size)
++            memcpy(vb.inputs[a], s_gpu.imm_attr[a], sizeof vb.inputs[a]);
++        else if (a < NV_VERTEX_ATTRS && s_gpu.attr[a].stride) {
++            amask |= 1u << a;
++            attrs[na++] = a;
++        } else {
++            vb.inputs[a][0] = vb.inputs[a][1] = vb.inputs[a][2] = 0.0f;
++            vb.inputs[a][3] = 1.0f;
++        }
++    }
++    /* Rows: the index range when it is dense (indexed meshes share
++     * vertices), else one row per index as the CPU path transforms them. */
++    lo = hi = n ? s_gpu.idx[0] : 0;
++    for (i = 1; i < n; i++) {
++        if (s_gpu.idx[i] < lo) lo = s_gpu.idx[i];
++        if (s_gpu.idx[i] > hi) hi = s_gpu.idx[i];
++    }
++    ranged = n && hi - lo < 2 * n + 64;
++    rows = ranged ? hi - lo + 1 : n;
++    need = (size_t)rows * (na ? na : 1) * 4;
++    if (need > s_vb_verts_cap) {
++        float *nb = (float *)realloc(s_vb_verts, need * sizeof(float));
++        if (!nb)
++            return 0;
++        s_vb_verts = nb;
++        s_vb_verts_cap = (uint32_t)need;
++    }
++    if (!s_vb_idx && !(s_vb_idx = (uint32_t *)malloc(3 * NV_MAX_INDICES * sizeof(uint32_t))))
++        return 0;
++    for (i = 0; i < rows; i++) {
++        uint32_t index = ranged ? lo + i : s_gpu.idx[i];
++        float *row = s_vb_verts + (size_t)i * na * 4;
++        for (a = 0; a < na; a++)
++            fetch_attr(&s_gpu.attr[attrs[a]], index, row + a * 4);
++    }
++#define VI(k) (ranged ? s_gpu.idx[k] - lo : (k))
++#define TRI(x, y, z) do { s_vb_idx[nidx++] = VI(x); s_vb_idx[nidx++] = VI(y); \
++                          s_vb_idx[nidx++] = VI(z); } while (0)
++    switch (s_gpu.prim) {
++    case NV_PRIM_TRIANGLES:
++        for (i = 0; i + 2 < n; i += 3) TRI(i, i + 1, i + 2);
++        break;
++    case NV_PRIM_TRIANGLE_STRIP:              /* one winding, as the CPU path */
++        for (i = 0; i + 2 < n; i++)
++            if (i & 1) TRI(i + 1, i, i + 2); else TRI(i, i + 1, i + 2);
++        break;
++    case NV_PRIM_TRIANGLE_FAN:
++    case NV_PRIM_POLYGON:
++        for (i = 1; i + 1 < n; i++) TRI(0, i, i + 1);
++        break;
++    case NV_PRIM_QUADS:
++        for (i = 0; i + 3 < n; i += 4) { TRI(i, i + 1, i + 2); TRI(i, i + 2, i + 3); }
++        break;
++    case NV_PRIM_QUAD_STRIP:
++        for (i = 0; i + 3 < n; i += 2) { TRI(i, i + 1, i + 3); TRI(i, i + 3, i + 2); }
++        break;
++    default:
++        break;
++    }
++#undef TRI
++#undef VI
++    s_gpu.batches_program++;
++    s_gpu.verts_program += n;
++    if (s_gpu.texs[0].valid)
++        note_texture_use();
++    if (!nidx)
++        return r;
++    vb.program = prog;
++    vb.ninstr = ninstr;
++    vb.constants = nv2a_vsh_constants();
++    vb.array_mask = amask;
++    vb.verts = s_vb_verts;
++    vb.nverts = rows;
++    vb.indices = s_vb_idx;
++    vb.aa_sx = (float)s_gpu.aa_sx;
++    vb.aa_sy = (float)s_gpu.aa_sy;
++    vb.uv_scale[0] = vb.uv_scale[1] = 1.0f;
++    if (tex_size_from_format(s_gpu.texs[0].color)) {
++        vb.uv_scale[0] = (float)s_gpu.texs[0].width;
++        vb.uv_scale[1] = (float)s_gpu.texs[0].height;
++    }
++    vb.clip_z = nv2a_vsh_constant(59)[2];
++    {
++        const char *e = getenv("RECOMP_CLIP_NEAR_Z");
++        if (e && e[0] == '0')
++            vb.clip_z = -INFINITY;
++    }
++    vb.fog_enable = s_gpu.fog_enable;
++    vb.fog_mode = s_gpu.fog_mode;
++    vb.fog_param[0] = s_gpu.fog_param[0];
++    vb.fog_param[1] = s_gpu.fog_param[1];
++    s_bcount = nidx;
++    s_bext_ok = 0;
++    s_bvsh = &vb;
++    backend_flush(1);
++    s_bvsh = NULL;
++    return r;
++}
++
+ static void raster_batch_program(void)
+ {
+     uint32_t i, n = s_gpu.idx_count;
+ 
++    s_bvsh_twin = 0;
++    if (batch_uses_program() && backend_draws()) {
++        int r = backend_vsh_batch();
++        if (r == 1)
++            return;
++        if (r == 2) {
++            s_gpu.batches_program--;          /* counted once */
++            s_gpu.verts_program -= n;
++            s_bvsh_twin = 1;
++        }
++    }
++
+     if (!s_xf && !(s_xf = (Nv2aVshOutput *)calloc(NV_MAX_INDICES, sizeof *s_xf)))
+         return;
+     for (i = 0; i < n; i++)
+@@ -3040,8 +3304,14 @@ static void raster_batch_program(void)
+             raster_xf_clipped(&s_xf[i], &s_xf[i+1], &s_xf[i+2]);
+         break;
+     case NV_PRIM_TRIANGLE_STRIP:
++        /* Every other strip triangle swaps its first two vertices so the
++         * whole strip keeps one winding (patch 0007): a back end that culls
++         * dropped every odd triangle, and strips came out as saw teeth. */
+         for (i = 0; i + 2 < n; i++)
+-            raster_xf_clipped(&s_xf[i], &s_xf[i+1], &s_xf[i+2]);
++            if (i & 1)
++                raster_xf_clipped(&s_xf[i+1], &s_xf[i], &s_xf[i+2]);
++            else
++                raster_xf_clipped(&s_xf[i], &s_xf[i+1], &s_xf[i+2]);
+         break;
+     case NV_PRIM_TRIANGLE_FAN:
+     case NV_PRIM_POLYGON:
+@@ -3067,6 +3337,7 @@ static void raster_batch_program(void)
+     xf_queue_flush();
+     if (backend_draws())
+         backend_flush(!s_xf_no_tex);
++    s_bvsh_twin = 0;
+ }
+ 
+ static void raster_batch(void)
+@@ -3075,6 +3346,7 @@ static void raster_batch(void)
+     uint32_t before = s_gpu.tris_drawn;
+     int textured = 0;
+ 
++    s_bvsh_twin = 0;
+     if (s_gpu.idx_count < 3)
+         return;
+     if (batch_uses_program() || batch_is_ffp()) {
+@@ -3109,7 +3381,7 @@ static void raster_batch(void)
+         break;
+     case NV_PRIM_TRIANGLE_STRIP:
+         for (i = 0; i + 2 < s_gpu.idx_count; i++)
+-            raster_indexed(s_gpu.idx[i], s_gpu.idx[i+1], s_gpu.idx[i+2],
++            raster_indexed(s_gpu.idx[i + (i & 1)], s_gpu.idx[i + 1 - (i & 1)], s_gpu.idx[i+2],
+                            vertex_color(s_gpu.idx[i]));
+         break;
+     case NV_PRIM_TRIANGLE_FAN:
+@@ -3402,6 +3674,13 @@ static void draw_inline_array(void)
+         case 0:  bytes = 4;                        break;  /* D3DCOLOR   */
+         case 2:  bytes = 4 * s_gpu.attr[a].size;   break;  /* float      */
+         case 4:  bytes = s_gpu.attr[a].size;       break;  /* ubyte norm */
++        /* Shorts are two bytes a component and the packed normal one dword
++         * (patch 0007): sizing them as floats misaligned every later
++         * attribute and every vertex after the first -- a short2 texcoord in
++         * a 24-byte vertex read as 28 bytes, and the world's inline batches
++         * came out as spikes. */
++        case 1: case 5: bytes = 2 * s_gpu.attr[a].size; break;
++        case 6:  bytes = 4;                        break;  /* NORMPACKED3 */
+         default: bytes = 4 * s_gpu.attr[a].size;   break;
+         }
+         s_gpu.attr[a].offset = off;
+@@ -3643,6 +3922,9 @@ static void tex_stage_method(uint32_t method, uint32_t param)
+     case 0x1B14:                                  /* SET_TEXTURE_FILTER */
+         t->filter = param;
+         break;
++    case 0x1B0C:                                  /* SET_TEXTURE_CONTROL0 */
++        t->control0 = param;
++        break;
+     case 0x1B24:                                  /* SET_TEXTURE_BORDER_COLOR */
+         t->border = param;
+         break;
+@@ -3744,10 +4026,14 @@ static void flip_hold_report(void)
+     h->held_ns = 0;
+ }
+ 
++void nv2a_gpu_census_method(uint32_t subch, uint32_t method, uint32_t param);
++
+ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+ {
+     static int inited;
+ 
++    nv2a_gpu_census_method(subch, method, param);   /* RECOMP_GPU_CENSUS, read-only */
++
+     /* BACK_END_WRITE_SEMAPHORE_RELEASE. The title's pointer already names the
+      * semaphore word; SET_SEMAPHORE_OFFSET is not added (in X-Men Legends it
+      * held 0xFF000000 at times, which put the write outside guest memory). */
+@@ -3925,9 +4211,11 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+     case 0x09C4: memcpy(&s_gpu.fog_param[1], &param, 4); break;
+     case 0x17C8:                                  /* CLEAR_REPORT_VALUE */
+         s_gpu.zpass_count = 0;
++        if (backend_draws() && s_backend->zpass) s_backend->zpass(0, 0);
+         break;
+     case 0x17CC:                                  /* SET_ZPASS_PIXEL_COUNT_ENABLE */
+         s_gpu.zpass_enable = param;
++        if (backend_draws() && s_backend->zpass) s_backend->zpass(1, param);
+         break;
+     case 0x17D0: {                                /* GET_REPORT */
+         /* The GPU's answer to a visibility test: 16 bytes at the report
+@@ -3941,6 +4229,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+         uint32_t at = dma_resolve(param & 0x00FFFFFFu);
+         uint64_t stamp = (uint64_t)s_gpu.reports++ * 1000u;
+         memcpy(mem + at, &stamp, 8);
++        if (backend_draws() && s_backend->zpass)
++            s_gpu.zpass_count = s_backend->zpass(2, 0);   /* the back end counted */
+         memcpy(mem + at + 8, &s_gpu.zpass_count, 4);
+         memset(mem + at + 12, 0, 4);
+         break;
+@@ -3960,7 +4250,10 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+                     param, s_gpu.color_offset, s_gpu.clip_w, s_gpu.clip_h,
+                     s_gpu.clear_color, 10);
+         clear_surface(param);
+-        if (param & 0x01)                         /* Z */
++        /* The software z-buffer is 1280x1024 floats (5 MB): with a back end
++         * that rasterises (and so owns depth), clearing it is pure memory
++         * traffic, several times a frame. */
++        if ((param & 0x01) && !backend_draws())   /* Z */
+             zbuf_clear();
+         break;
+ 
+@@ -4130,6 +4423,11 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+             }
+         }
+         s_gpu.drawn_stale = 1;
++        /* The buffer this swap shows: the colour target at the stall (in
++         * Concrete Jungle D3D re-targets the next back buffer only after it).
++         * A back end can present that instead of guessing from which
++         * frame-sized surface was drawn last. */
++        g_nv2a_flip_front_va = s_gpu.color_offset ? dma_resolve(s_gpu.color_offset) : 0;
+         if (s_backend && s_backend->flip)
+             s_backend->flip();
+ 
+@@ -4572,3 +4870,15 @@ void nv2a_pb_exec_report(void)
+         s_unhandled_slot[(s_unhandled[i].method & 0x1FFC) / 4] = (uint16_t)(i + 1);
+     fflush(stderr);
+ }
++
++/* ---- save states (xbox_snapshot.h): the GPU register shadow */
++#include "xbox_snapshot.h"
++int nv2a_pb_exec_snap_regions(XboxSnapRegion *r, int max)
++{
++    int n = 0;
++    if (n < max) { r[n].p = s_reg; r[n].n = sizeof s_reg; r[n].name = "pb_exec.s_reg"; } n++;
++    if (n < max) { r[n].p = s_tex_reg; r[n].n = sizeof s_tex_reg; r[n].name = "pb_exec.s_tex_reg"; } n++;
++    if (n < max) { r[n].p = s_tex_set; r[n].n = sizeof s_tex_set; r[n].name = "pb_exec.s_tex_set"; } n++;
++    if (n < max) { r[n].p = &s_sem_va; r[n].n = sizeof s_sem_va; r[n].name = "pb_exec.s_sem_va"; } n++;
++    return n;
++}
+diff --git a/src/kernel/nv2a_pb_scan.c b/src/kernel/nv2a_pb_scan.c
+index e3a16e2..3b51757 100644
+--- a/src/kernel/nv2a_pb_scan.c
++++ b/src/kernel/nv2a_pb_scan.c
+@@ -466,12 +466,71 @@ int nv2a_pb_dma_walk(void)
+ static int s_in_call;
+ int nv2a_pb_scan_in_call(void) { return s_in_call; }
+ 
++/* RECOMP_TRACE_METHOD=<hex>: print every write of that method with its
++ * pushbuffer address, header, index and count (diagnostic, capped). */
++extern uint32_t cj_gl_flips(void) __attribute__((weak));
++static int trace_method_hit(uint32_t m)
++{
++    static int tm = -2;
++    static long tf = -1;
++    static unsigned n;
++    if (tm == -2) {
++        const char *e = getenv("RECOMP_TRACE_METHOD");
++        tm = e ? (int)strtoul(e, NULL, 16) : -1;
++        e = getenv("RECOMP_TRACE_FLIP");   /* only in that flip (GL back end's count) */
++        tf = e ? atol(e) : -1;
++    }
++    if (tm < 0 || m != (uint32_t)tm || n >= 20000)
++        return 0;
++    if (tf >= 0 && (!cj_gl_flips || cj_gl_flips() != (uint32_t)tf))
++        return 0;
++    n++;
++    return 1;
++}
++
++/* RECOMP_PB_SEG_FIX=0 restores the old segment scan (methods cut at PUT,
++ * wraps bounded by the highest PUT seen). */
++static int s_seg_pend_fix(void)
++{
++    static int on = -1;
++    if (on < 0) { const char *e = getenv("RECOMP_PB_SEG_FIX"); on = !(e && e[0] == '0'); }
++    return on;
++}
++int nv2a_pb_seg_fix(void) { return s_seg_pend_fix(); }
++static int s_seg_jumped;
++static uint32_t s_seg_jump_to;
++int nv2a_pb_seg_jumped(void) { int j = s_seg_jumped; s_seg_jumped = 0; return j; }
++uint32_t nv2a_pb_seg_jump_to(void) { return s_seg_jump_to; }
++/* A method whose parameters run past the end of the segment (PUT): XDK D3D
++ * kicks in the middle of long methods (inline vertex arrays, constant
++ * uploads). The rest of the parameters arrive in the next segment, and they
++ * must be fed to the same method, not decoded as headers -- that turned
++ * vertex data into a burst of bogus commands and lost the draws after it
++ * for one frame (whole objects flickering out, text missing). */
++static uint32_t s_seg_pend_left, s_seg_pend_i, s_seg_pend_method, s_seg_pend_subch;
++static int s_seg_pend_noninc;
+ static uint32_t pb_walk_segment(uint32_t va, uint32_t end_va, int in_call,
+                                 uint32_t *jumps, uint32_t *unknown)
+ {
+     const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
+     uint32_t words = 0;
+ 
++    if (!in_call && s_seg_pend_left) {
++        if (s_seg_pend_fix())
++            while (s_seg_pend_left && va < end_va) {
++                uint32_t m = s_seg_pend_noninc ? s_seg_pend_method
++                                               : s_seg_pend_method + s_seg_pend_i * 4;
++                note(s_seg_pend_subch, m);
++                if (s_exec_enabled)
++                    nv2a_pb_exec_method(s_seg_pend_subch, m, *(const uint32_t *)(mem + va));
++                va += 4;
++                words++;
++                s_seg_pend_i++;
++                s_seg_pend_left--;
++            }
++        else
++            s_seg_pend_left = 0;
++    }
+     while (va < end_va && words < 0x100000u) {
+         uint32_t w = *(const uint32_t *)(mem + va);
+         va += 4;
+@@ -481,8 +540,11 @@ static uint32_t pb_walk_segment(uint32_t va, uint32_t end_va, int in_call,
+             uint32_t target = (w & 3u) == 1u ? (w & 0xFFFFFFFCu)
+                                              : (w & 0x1FFFFFFCu);
+             (*jumps)++;
+-            if (!in_call)
++            if (!in_call) {
++                s_seg_jumped = 1;
++                s_seg_jump_to = 0x80000000u | (target & 0x0FFFFFFFu);
+                 break;                        /* the ring: a jump ends it */
++            }
+             va = 0x80000000u | (target & 0x0FFFFFFFu);
+             end_va = va + 0x400000u;
+             continue;
+@@ -508,8 +570,22 @@ static uint32_t pb_walk_segment(uint32_t va, uint32_t end_va, int in_call,
+             uint32_t method =  w & 0x1FFCu;
+             int noninc = (w & 0xE0000000u) == 0x40000000u;
+ 
++            if (!in_call && va + count * 4 > end_va) {
++                uint32_t have = (end_va - va) / 4;
++                s_seg_pend_left = count - have;
++                s_seg_pend_i = have;
++                s_seg_pend_method = method;
++                s_seg_pend_subch = subch;
++                s_seg_pend_noninc = noninc;
++            }
+             for (uint32_t i = 0; i < count && va < end_va; i++) {
+                 uint32_t m = noninc ? method : method + i * 4;
++                if (trace_method_hit(m)) {
++                    const uint32_t *pw = (const uint32_t *)(mem + va);
++                    fprintf(stderr, "[TRACEM] va=%08X hdr=%08X (at %08X) sub=%u m0=%04X i=%u/%u ninc=%d call=%d p=%08X | prev %08X %08X %08X %08X\n",
++                            va, w, va - 4 - i * 4, subch, method, i, count, noninc, in_call, *pw,
++                            pw[-(long)i - 5], pw[-(long)i - 4], pw[-(long)i - 3], pw[-(long)i - 2]);
++                }
+                 note(subch, m);
+                 if (s_exec_enabled)
+                     nv2a_pb_exec_method(subch, m,
+@@ -544,3 +620,17 @@ void nv2a_pb_scan_segment(uint32_t start_va, uint32_t end_va)
+     s_tot_jumps += jumps;
+     s_tot_segments++;
+ }
++
++/* ---- save states (xbox_snapshot.h): the walk position and carried methods */
++#include "xbox_snapshot.h"
++#define SNAP(v) do { if (n < max) { r[n].p = (void *)&(v); r[n].n = sizeof(v); r[n].name = "pb_scan." #v; } n++; } while (0)
++int nv2a_pb_scan_snap_regions(XboxSnapRegion *r, int max)
++{
++    int n = 0;
++    SNAP(s_get); SNAP(s_ret); SNAP(s_in_call); SNAP(s_pub);
++    SNAP(s_pend_left); SNAP(s_pend_i); SNAP(s_pend_method); SNAP(s_pend_subch); SNAP(s_pend_noninc);
++    SNAP(s_seg_jumped); SNAP(s_seg_jump_to);
++    SNAP(s_seg_pend_left); SNAP(s_seg_pend_i); SNAP(s_seg_pend_method); SNAP(s_seg_pend_subch); SNAP(s_seg_pend_noninc);
++    return n;
++}
++#undef SNAP
+diff --git a/src/kernel/nv2a_vsh_interp.c b/src/kernel/nv2a_vsh_interp.c
+index c1b48e4..3dafd3c 100644
+--- a/src/kernel/nv2a_vsh_interp.c
++++ b/src/kernel/nv2a_vsh_interp.c
+@@ -194,6 +194,21 @@ void nv2a_vsh_constant_component(uint32_t index, uint32_t comp, uint32_t word)
+         memcpy(&s_const[index][comp], &word, 4);
+ }
+ 
++const uint32_t (*nv2a_vsh_program(uint32_t *ninstr))[4]
++{
++    uint32_t s;
++    for (s = s_start_slot; s < NV2A_VSH_SLOTS; s++)
++        if (field(s_program[s], 3, 0, 1)) {
++            *ninstr = s - s_start_slot + 1;
++            return (const uint32_t (*)[4])s_program[s_start_slot];
++        }
++    *ninstr = 0;
++    return NULL;
++}
++
++const float (*nv2a_vsh_constants(void))[4] { return (const float (*)[4])s_const; }
++uint32_t nv2a_vsh_cxt_write(void) { return s_cxt_write; }
++
+ /* ---- execution ----------------------------------------------------------- */
+ 
+ typedef struct { float v[4]; } vec4;
+@@ -430,3 +445,15 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
+     }
+     return 0;
+ }
++
++/* ---- save states (xbox_snapshot.h): the vertex program and constants */
++#include "xbox_snapshot.h"
++int nv2a_vsh_snap_regions(XboxSnapRegion *r, int max)
++{
++    int n = 0;
++#define SNAPV(v) do { if (n < max) { r[n].p = (void *)&(v); r[n].n = sizeof(v); r[n].name = "vsh." #v; } n++; } while (0)
++    SNAPV(s_program); SNAPV(s_const); SNAPV(s_load_slot); SNAPV(s_load_word); SNAPV(s_start_slot);
++    SNAPV(s_const_load); SNAPV(s_const_word); SNAPV(s_cxt_write);
++#undef SNAPV
++    return n;
++}
+diff --git a/src/kernel/nv2a_vsh_interp.h b/src/kernel/nv2a_vsh_interp.h
+index 8acb0af..5c83899 100644
+--- a/src/kernel/nv2a_vsh_interp.h
++++ b/src/kernel/nv2a_vsh_interp.h
+@@ -58,4 +58,11 @@ const float *nv2a_vsh_constant(uint32_t index);   /* for traces */
+ void nv2a_vsh_constant_component(uint32_t index, uint32_t comp, uint32_t word);
+ void nv2a_vsh_set_instruction(uint32_t slot, const uint32_t words[4]);
+ 
++/* For a back end that runs programs itself (nv2a_backend.h, patch 0008): the
++ * program from the start slot through its FINAL instruction (NULL, *ninstr 0
++ * if there is none), all of c[], and whether the program may write c[]. */
++const uint32_t (*nv2a_vsh_program(uint32_t *ninstr))[4];
++const float (*nv2a_vsh_constants(void))[4];
++uint32_t nv2a_vsh_cxt_write(void);
++
+ #endif
+diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
+index b723a92..ee513f8 100644
+--- a/src/kernel/xbox_memory_layout.c
++++ b/src/kernel/xbox_memory_layout.c
+@@ -15,6 +15,9 @@
+ #if !defined(_WIN32) && !defined(_GNU_SOURCE)
+ #define _GNU_SOURCE   /* glibc declares dladdr/Dl_info (RECOMP_WATCH) only under it */
+ #endif
++#if !defined(_WIN32) && defined(__x86_64__) && !defined(_GNU_SOURCE)
++#define _GNU_SOURCE 1   /* REG_* gregs indices for the AC'97 trap */
++#endif
+ #include "xbox_memory_layout.h"
+ #include "kernel.h"
+ #include "guest_vmem.h"
+@@ -656,8 +659,15 @@ static LONG CALLBACK ac97_write_veh(PEXCEPTION_POINTERS ep)
+     return EXCEPTION_CONTINUE_SEARCH;
+ }
+ 
+-#if !defined(_WIN32) && defined(__aarch64__)
++#if !defined(_WIN32) && (defined(__aarch64__) || defined(__x86_64__))
++#if defined(__aarch64__)
+ #include "../platform/mmio_decode_a64.h"
++#else
++#include <signal.h>
++#include <ucontext.h>
++#define MMIO_DECODE_POSIX_CONTEXT 1
++#include "../platform/mmio_decode.h"
++#endif
+ #include <sys/mman.h>
+ static size_t g_ac97_hsize;    /* host page: 16 KB on arm64 Darwin */
+ 
+@@ -705,8 +715,30 @@ int xbox_Ac97PosixFault(void *ucv, uintptr_t fault)
+         __atomic_store_n(&g_ac97_posix_lock, 0, __ATOMIC_RELEASE);
+         return 0;
+     }
++#if defined(__aarch64__)
+     ok = mmio_emulate_a64((ucontext_t *)ucv, (uint32_t)(fault - (uintptr_t)g_ac97_page),
+                           g_ac97_page, ac97_posix_rd, ac97_posix_wr);
++#else
++    {
++        greg_t *g = ((ucontext_t *)ucv)->uc_mcontext.gregs;
++        MMIO_CONTEXT c;
++        c.Rax = g[REG_RAX]; c.Rcx = g[REG_RCX]; c.Rdx = g[REG_RDX]; c.Rbx = g[REG_RBX];
++        c.Rsp = g[REG_RSP]; c.Rbp = g[REG_RBP]; c.Rsi = g[REG_RSI]; c.Rdi = g[REG_RDI];
++        c.R8 = g[REG_R8];   c.R9 = g[REG_R9];   c.R10 = g[REG_R10]; c.R11 = g[REG_R11];
++        c.R12 = g[REG_R12]; c.R13 = g[REG_R13]; c.R14 = g[REG_R14]; c.R15 = g[REG_R15];
++        c.Rip = g[REG_RIP]; c.EFlags = (uint32_t)g[REG_EFL];
++        ok = mmio_emulate(&c, (uint32_t)(fault - (uintptr_t)g_ac97_page),
++                          g_ac97_page, ac97_posix_rd, ac97_posix_wr);
++        if (ok) {
++            g[REG_RAX] = c.Rax; g[REG_RCX] = c.Rcx; g[REG_RDX] = c.Rdx; g[REG_RBX] = c.Rbx;
++            g[REG_RSP] = c.Rsp; g[REG_RBP] = c.Rbp; g[REG_RSI] = c.Rsi; g[REG_RDI] = c.Rdi;
++            g[REG_R8] = c.R8;   g[REG_R9] = c.R9;   g[REG_R10] = c.R10; g[REG_R11] = c.R11;
++            g[REG_R12] = c.R12; g[REG_R13] = c.R13; g[REG_R14] = c.R14; g[REG_R15] = c.R15;
++            g[REG_RIP] = c.Rip;
++            g[REG_EFL] = (greg_t)((g[REG_EFL] & ~0xFFFFFFFFll) | c.EFlags);
++        }
++    }
++#endif
+     if (ok)
+         ac97_clear_reset_bits();
+     mprotect(g_ac97_page, g_ac97_hsize, PROT_READ);
+@@ -724,7 +756,7 @@ static void ac97_arm_write_trap(void)
+ 
+     if (!g_mcpx_memory || g_ac97_page)
+         return;
+-#if !defined(_WIN32) && !defined(__aarch64__)
++#if !defined(_WIN32) && !defined(__aarch64__) && !defined(__x86_64__)
+     /* No POSIX decoder for this host's stores: a trapped write would be a
+      * fault nothing services. Leave the page writable. */
+     (void)old;
+@@ -733,7 +765,7 @@ static void ac97_arm_write_trap(void)
+     return;
+ #endif
+     g_ac97_page = (char *)g_mcpx_memory + AC97_NABM_OFFSET;
+-#if !defined(_WIN32) && defined(__aarch64__)
++#if !defined(_WIN32) && (defined(__aarch64__) || defined(__x86_64__))
+     (void)old;
+     g_ac97_hsize = (size_t)sysconf(_SC_PAGESIZE);
+     if (g_ac97_hsize < AC97_TRAP_BYTES)
+@@ -831,7 +863,7 @@ int xbox_VehMmioFault(void *exception_pointers)
+     return 0;
+ }
+ #else
+-#if defined(__aarch64__)
++#if defined(__aarch64__) || defined(__x86_64__)
+ extern bool apu_hook_handle_mmio_posix(void *ucv, uintptr_t fault_addr,
+                                        uint32_t fault_xbox_va, int is_write);
+ #endif
+@@ -856,6 +888,17 @@ int xbox_PosixMmioFault(void *ucv, uintptr_t fault)
+         return 1;
+     if (xbox_OhciOwnsAddress(va))
+         return xbox_OhciHandleMmio(ucv, va);
++#elif defined(__x86_64__)
++    uint32_t va;
++
++    /* APU and AC'97; the OHCI trap on this host is not wired yet. */
++    if (!mmio_fault_va(fault, &va))
++        return 0;
++    if (va >= MMIO_APU_BASE && va < MMIO_APU_END)
++        return g_apu_state
++            && apu_hook_handle_mmio_posix(ucv, fault, va, 0);
++    if (xbox_Ac97PosixFault(ucv, fault))
++        return 1;
+ #else
+     (void)ucv; (void)fault;
+ #endif
+@@ -1436,10 +1479,24 @@ volatile uint32_t *xbox_Nv2aRegPtr(uint32_t offset)
+     return (volatile uint32_t *)((char *)g_nv2a_memory + offset);
+ }
+ 
++/* The walk's own position between ticks (file scope for save states). */
++static DWORD    s_ack_last_put_ms;
++static uint32_t s_ack_last_put;
++static uint32_t s_ack_get_written = 0xFFFFFFFFu;  /* GET as we last left it */
++static uint32_t s_ack_put_lo, s_ack_put_hi;
++/* Save states park this thread between ticks (xbox_nv2a_pause). */
++static volatile LONG g_nv2a_ack_pause, g_nv2a_ack_parked;
++
+ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+ {
+     volatile uint32_t *regs = (volatile uint32_t *)param;
+     while (!InterlockedCompareExchange(&g_nv2a_ack_stop, 0, 0)) {
++        if (g_nv2a_ack_pause) {
++            InterlockedExchange(&g_nv2a_ack_parked, 1);
++            while (g_nv2a_ack_pause && !g_nv2a_ack_stop) Sleep(1);
++            InterlockedExchange(&g_nv2a_ack_parked, 0);
++            continue;
++        }
+         /* A flip held for its vblank (nv2a_flip_hold.h): this pass walks
+          * nothing, leaves DMA_GET where it is and acknowledges no PFB flush,
+          * which is how the title feels the console's FLIP_STALL. Nothing is
+@@ -1497,9 +1554,9 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+             /* Is the title submitting GPU work at all? PUT is where the
+              * title's pushbuffer writer has got to; if it never moves, nothing
+              * is being drawn and the missing piece is upstream of the GPU. */
+-            static DWORD  last_put_ms;
+-            static uint32_t last_put;
+-            static uint32_t get_written = 0xFFFFFFFFu;  /* GET as we last left it */
++#define last_put_ms s_ack_last_put_ms
++#define last_put s_ack_last_put
++#define get_written s_ack_get_written
+             DWORD now_ms = GetTickCount();
+             uint32_t put = *(volatile uint32_t *)((char *)regs + NV2A_USER_DMA_PUT);
+             if (!flip_held
+@@ -1547,21 +1604,46 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+                          * ring, so PUT coming back below where it was is a
+                          * wrap, not a rewind; the ring's bounds are learned
+                          * from the lowest and highest PUT seen. */
+-                        static uint32_t put_lo, put_hi;
++#define put_lo s_ack_put_lo
++#define put_hi s_ack_put_hi
+                         if (!put_lo || put < put_lo) put_lo = put;
+                         if (put > put_hi) put_hi = put;
+                         if (last_put && put > last_put) {
+                             nv2a_pb_scan_segment(XBOX_CONTIG_BASE | (last_put & 0x0FFFFFFFu),
+                                                  XBOX_CONTIG_BASE | (put      & 0x0FFFFFFFu));
+                         } else if (last_put && put < last_put) {
+-                            if (put_hi > last_put)
++                            /* The wrap. XDK D3D ends the lap with a JUMP back
++                             * to the start of the ring, wherever it ran out of
++                             * room -- which can be past every PUT seen so far.
++                             * Scanning only up to the highest PUT dropped the
++                             * commands between it and the JUMP for that lap
++                             * (a frame with whole objects missing). So walk
++                             * on to the JUMP (the walk stops there), bounded,
++                             * and start the second piece at its target. */
++                            extern int nv2a_pb_seg_jumped(void);
++                            extern uint32_t nv2a_pb_seg_jump_to(void);
++                            extern int nv2a_pb_seg_fix(void);
++                            uint32_t lo = put_lo, hi = put_hi;
++                            if (nv2a_pb_seg_fix()) {
++                                hi = (hi > last_put ? hi : last_put) + 0x100000u;
++                                nv2a_pb_seg_jumped();
++                            }
++                            if (hi > last_put)
+                                 nv2a_pb_scan_segment(
+                                     XBOX_CONTIG_BASE | (last_put & 0x0FFFFFFFu),
+-                                    XBOX_CONTIG_BASE | (put_hi   & 0x0FFFFFFFu));
+-                            if (put > put_lo)
++                                    XBOX_CONTIG_BASE | (hi       & 0x0FFFFFFFu));
++                            if (nv2a_pb_seg_fix()) {
++                                static unsigned n_nojump;
++                                if (nv2a_pb_seg_jumped())
++                                    lo = nv2a_pb_seg_jump_to() & 0x0FFFFFFFu;
++                                else if (++n_nojump <= 8)
++                                    fprintf(stderr, "[PB] ring wrap without a JUMP after 0x%08X (PUT 0x%08X)\n",
++                                            last_put, put);
++                            }
++                            if (put > lo)
+                                 nv2a_pb_scan_segment(
+-                                    XBOX_CONTIG_BASE | (put_lo & 0x0FFFFFFFu),
+-                                    XBOX_CONTIG_BASE | (put    & 0x0FFFFFFFu));
++                                    XBOX_CONTIG_BASE | (lo  & 0x0FFFFFFFu),
++                                    XBOX_CONTIG_BASE | (put & 0x0FFFFFFFu));
+                         }
+                     }
+                     /* Periodic, because what the title submits at init is not
+@@ -1634,14 +1716,24 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+          * up XNet. A live clock is also just the truth -- KeTickCount ticks on
+          * hardware whether or not anyone is asleep. GetTickCount() shares the
+          * millisecond unit, so the rate matches. */
+-        *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
+-                               + g_memory_offset) = GetTickCount();
++        {
++            extern volatile int xbox_det_time;   /* kernel_hal.c: project owns the clock */
++            if (!xbox_det_time)
++                *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
++                                       + g_memory_offset) = GetTickCount();
++        }
+ 
+         Sleep(0);  /* yield; the waiter is spinning on another core */
+     }
+     return 0;
+ }
+ 
++#undef last_put_ms
++#undef last_put
++#undef get_written
++#undef put_lo
++#undef put_hi
++
+ static void xbox_Nv2aAckStart(void)
+ {
+     dsp_ack_init();
+@@ -1700,6 +1792,16 @@ static uint32_t g_tls_template_va, g_tls_total, g_tls_thread_size = 64;
+ RECOMP_TLS uint32_t g_eax = 0, g_ecx = 0, g_edx = 0, g_esp = 0;
+ RECOMP_TLS uint32_t g_ebx = 0, g_esi = 0, g_edi = 0;
+ 
++/* Stack hygiene (recomp_types.h RECOMP_ESP_MARK/LOWER): zero [lo, hi) of the
++ * guest stack when esp moved down. Bounded so a stack switch is not wiped. */
++int g_recomp_stack_zero = 0;
++RECOMP_TLS uint32_t g_recomp_esp_mark = 0;
++void recomp_stack_zero(uint32_t lo, uint32_t hi)
++{
++    if (lo < hi && hi - lo <= 0x100000u)
++        memset((void *)((uintptr_t)lo + g_xbox_mem_offset), 0, hi - lo);
++}
++
+ #ifdef RECOMP_ABI_CHECK
+ /* Report a lifted function that returned without restoring ebx/esi/edi.
+  *
+@@ -1920,6 +2022,7 @@ static void    *g_watch_page;
+ static uint32_t g_watch_last;
+ static void    *g_watch_veh;
+ static RECOMP_TLS int s_watch_stepping;
++static RECOMP_TLS uintptr_t s_watch_rip;   /* the host instruction that wrote (Windows) */
+ 
+ /* A plausible guest code address: inside the image's executable sections,
+  * as recorded from the section headers at load. */
+@@ -1938,6 +2041,13 @@ static void watch_report(void)
+         return;
+     fprintf(stderr, "[WATCH] [%08X] %08X -> %08X  (esp=%08X)\n",
+             g_watch_va, g_watch_last, now, esp);
++#if defined(_WIN32)
++    if (s_watch_rip) {   /* the writer in host terms: exe offset (look it up in the unstripped build) */
++        HMODULE hm = GetModuleHandleA(NULL);
++        fprintf(stderr, "[WATCH] written by host code at exe+0x%llX (rip %p), thread %lu\n",
++                (unsigned long long)(s_watch_rip - (uintptr_t)hm), (void *)s_watch_rip, (unsigned long)GetCurrentThreadId());
++    }
++#endif
+     g_watch_last = now;
+ 
+     /* Return addresses the recompiled code pushed, innermost first. Values
+@@ -1998,6 +2108,9 @@ static LONG CALLBACK watch_veh(PEXCEPTION_POINTERS ep)
+             if (!VirtualProtect(g_watch_page, 4096, PAGE_READWRITE, &old))
+                 return EXCEPTION_CONTINUE_SEARCH;
+             s_watch_stepping = 1;
++#if defined(_M_X64) || defined(__x86_64__)
++            s_watch_rip = (uintptr_t)ep->ContextRecord->Rip;
++#endif
+             ep->ContextRecord->EFlags |= 0x100u;
+             return EXCEPTION_CONTINUE_EXECUTION;
+         }
+@@ -2571,6 +2684,12 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+             0x01000000,             /* 16 MB */
+             0x02000000,             /* 32 MB */
+             0x10000000,             /* 256 MB */
++#if defined(_WIN64)
++            /* High bases: Wine on arm64 macOS (Rosetta) keeps its own image
++             * at 0x100000000, inside the window of every low base above, so
++             * the tiled aperture and the top mirrors fail with error 487. */
++            0x200000000ULL, 0x400000000ULL, 0x800000000ULL, 0x1000000000ULL,
++#endif
+             0,                      /* sentinel - let OS choose */
+         };
+ 
+@@ -2642,8 +2761,38 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+ #endif
+ 
+         const size_t n_bases = sizeof(try_bases) / sizeof(try_bases[0]);
++#if defined(_WIN32)
++        /* RECOMP_GUEST_BASE=<hex>: force the host base of the guest window. */
++        if (!g_memory_base && getenv("RECOMP_GUEST_BASE")) {
++            uintptr_t fb = (uintptr_t)strtoull(getenv("RECOMP_GUEST_BASE"), NULL, 16);
++            g_memory_base = MapViewOfFileEx(g_mapping_handle, FILE_MAP_ALL_ACCESS,
++                                            0, 0, g_memory_size, (LPVOID)fb);
++            fprintf(stderr, "xbox_MemoryLayoutInit: RECOMP_GUEST_BASE %p -> %p\n",
++                    (void *)fb, g_memory_base);
++        }
++#endif
+         for (size_t i = 0; !g_memory_base && i < n_bases; i++) {
+             LPVOID hint = try_bases[i] ? (LPVOID)try_bases[i] : NULL;
++#if defined(_WIN32)
++            /* A fixed base is only usable if the whole 4 GB guest window above
++             * it is free (mirrors, contiguous window, tiled aperture are
++             * mapped at fixed offsets from it later). */
++            if (try_bases[i]) {
++                uintptr_t a = try_bases[i], end = try_bases[i] + ((uintptr_t)1 << 32);
++                int ok = 1;
++                while (a < end) {
++                    MEMORY_BASIC_INFORMATION mbi;
++                    if (!VirtualQuery((LPCVOID)a, &mbi, sizeof mbi)) { ok = 0; break; }
++                    if (mbi.State != MEM_FREE) { ok = 0; break; }
++                    a = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
++                }
++                if (!ok) {
++                    fprintf(stderr, "xbox_MemoryLayoutInit: base %p skipped, guest window not free at %p\n",
++                            (void *)try_bases[i], (void *)a);
++                    continue;
++                }
++            }
++#endif
+             g_memory_base = MapViewOfFileEx(
+                 g_mapping_handle,
+                 FILE_MAP_ALL_ACCESS,
+@@ -3120,6 +3269,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+ 
+                 g_tls_template_va = FAKE_TLS_BLOCK_VA;
+                 g_tls_total       = total;
++                {   /* RECOMP_HELPER_TIB_POOL=1 (set by a title's determinism mode) */
++                    extern void xbox_helper_tib_pool_reserve(void);
++                    const char *hp = getenv("RECOMP_HELPER_TIB_POOL");
++                    if (hp && *hp == '1') xbox_helper_tib_pool_reserve();
++                }
+ 
+                 fprintf(stderr, "  TLS: %u-byte block at 0x%08X,"
+                         " fs:[4] = 0x%08X (index will be %d)\n",
+@@ -3888,6 +4042,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
+ #define XBOX_MAX_THREAD_STACKS  8
+ 
+ static int g_thread_stacks_used = 0;
++static uint32_t g_thread_stack_tops[XBOX_MAX_THREAD_STACKS];   /* live worker stacks (save states) */
+ 
+ /* A TIB and TLS block for a newly spawned guest thread.
+  *
+@@ -3906,20 +4061,53 @@ static int g_thread_stacks_used = 0;
+  * with the image's initialised thread-local data rather than zeros, and its
+  * own per-thread structure behind slot 0.
+  */
++/* Helper-thread TIBs (APU interrupt, OHCI, timer DPC threads) come from a
++ * pool reserved on the loader thread right after the TLS template is known.
++ * Those threads used to take their TIB from the shared guest heap when they
++ * first ran, so where every later heap block (thread stacks, DirectSound and
++ * device objects) landed depended on host thread timing. Exported so a
++ * hashing tool can leave the pool out (its contents follow helper threads). */
++#define XBOX_HELPER_TIBS 16
++uint32_t g_helper_tib_pool, g_helper_tib_pool_end;
++static volatile LONG g_helper_tib_next;
++static uint32_t tib_stride(void) { return (0x40 + g_tls_total + g_tls_thread_size + 0xFu) & ~0xFu; }
++static uint32_t tib_init(uint32_t tib);
++uint32_t xbox_AllocThreadTib(void);
++uint32_t xbox_AllocHelperTib(void)
++{
++    LONG i;
++    if (!g_helper_tib_pool) return xbox_AllocThreadTib();
++    i = InterlockedIncrement(&g_helper_tib_next) - 1;
++    if (i >= XBOX_HELPER_TIBS) return xbox_AllocThreadTib();
++    return tib_init(g_helper_tib_pool + (uint32_t)i * tib_stride());
++}
++void xbox_helper_tib_pool_reserve(void)
++{
++    if (g_tls_total && !g_helper_tib_pool) {
++        g_helper_tib_pool = xbox_HeapAlloc(XBOX_HELPER_TIBS * tib_stride(), 16);
++        if (g_helper_tib_pool) g_helper_tib_pool_end = g_helper_tib_pool + XBOX_HELPER_TIBS * tib_stride();
++    }
++}
++
+ uint32_t xbox_AllocThreadTib(void)
++{
++    uint32_t tib;
++    if (!g_tls_total)
++        return 0;                    /* image has no TLS; nothing to copy */
++    tib = xbox_HeapAlloc(0x40 + g_tls_total + g_tls_thread_size, 16);
++    if (!tib)
++        return 0;
++    return tib_init(tib);
++}
++
++static uint32_t tib_init(uint32_t tib)
+ {
+     /* XBOX_VA is scoped to the loader; the same arithmetic, spelled here. */
+     #define TIB_VA(va) ((void *)((uintptr_t)(va) + g_memory_offset))
+     const uint32_t tib_size = 0x40;
+-    uint32_t tib, block, thread_data, total;
+-
+-    if (!g_tls_total)
+-        return 0;                    /* image has no TLS; nothing to copy */
++    uint32_t block, thread_data, total;
+ 
+     total = g_tls_total;
+-    tib = xbox_HeapAlloc(tib_size + total + g_tls_thread_size, 16);
+-    if (!tib)
+-        return 0;
+     block       = tib + tib_size;
+     thread_data = block + total;
+ 
+@@ -3963,6 +4151,11 @@ uint32_t xbox_AllocThreadStack(void)
+     if (!base)
+         return 0;
+     g_thread_stacks_used++;
++    {
++        int i;
++        for (i = 0; i < XBOX_MAX_THREAD_STACKS; i++)
++            if (!g_thread_stack_tops[i]) { g_thread_stack_tops[i] = base + XBOX_THREAD_STACK_SIZE - 16; break; }
++    }
+ 
+     /* Top of the slice, 16-byte aligned, growing down. */
+     return base + XBOX_THREAD_STACK_SIZE - 16;
+@@ -3987,6 +4180,11 @@ void xbox_FreeThreadStack(uint32_t stack_top)
+     if (!stack_top)
+         return;
+     xbox_HeapFree(stack_top + 16 - XBOX_THREAD_STACK_SIZE);
++    {
++        int i;
++        for (i = 0; i < XBOX_MAX_THREAD_STACKS; i++)
++            if (g_thread_stack_tops[i] == stack_top) g_thread_stack_tops[i] = 0;
++    }
+     if (g_thread_stacks_used > 0)
+         g_thread_stacks_used--;
+ }
+@@ -4371,10 +4569,33 @@ uint32_t xbox_ContiguousInUseBytes(void)
+  * most one pass of one voice. */
+ static volatile uint8_t g_phys_ram_named[CONTIG_PAGES];
+ 
++/* Image pages MmGetPhysicalAddress has named, kept apart from the heap
++ * record above because they never clear.
++ *
++ * A title can keep a DMA buffer in its own .data or BSS and hand DirectSound
++ * its physical address. Predator: Concrete Jungle puts its music mixer's five
++ * 8 KB PCM rings at 0x004D4328 in BSS, inside an image that ends at
++ * 0x0050C870, while the arena had handed out the same physical numbers as
++ * window pages (D3D textures). The APU read the window: a constant 0x5151
++ * on two voices left unmuted into bins 0/1, so the whole mix sat at +32767
++ * (no menu music, and gameplay sound clipped hard).
++ *
++ * Only pages the title actually named are recorded, so the case mcpx_apu_phys
++ * keeps the window for (DirectSound's voice array at a window address inside a
++ * large image, never named through the image) still reads the window. */
++static volatile uint8_t g_phys_img_named[CONTIG_PAGES];
++
+ void xbox_PhysNoteRamName(uint32_t va)
+ {
+     if (va >= XBOX_HEAP_BASE && va < XBOX_HEAP_TOP && va < XBOX_CONTIG_SIZE)
+         g_phys_ram_named[va / CONTIG_PAGE] = 1;
++    else if (va >= g_xbox_image_lo && va < g_xbox_image_hi && va < XBOX_CONTIG_SIZE)
++        g_phys_img_named[va / CONTIG_PAGE] = 1;
++}
++
++const volatile uint8_t *xbox_PhysImageNameMap(void)
++{
++    return g_phys_img_named;
+ }
+ 
+ /* Heap block m is free (and merged with any free neighbours): its pages name
+@@ -4640,3 +4861,64 @@ HANDLE xbox_GetMappingHandle(void)
+ {
+     return g_mapping_handle;
+ }
++
++
++/* ---- save states (xbox_snapshot.h) ---------------------------------------- */
++#include "xbox_snapshot.h"
++int xbox_worker_stacks(uint32_t *lo, uint32_t *hi, int max)
++{
++    int i, n = 0;
++    for (i = 0; i < XBOX_MAX_THREAD_STACKS; i++)
++        if (g_thread_stack_tops[i]) {
++            if (n < max) { hi[n] = g_thread_stack_tops[i] + 16; lo[n] = hi[n] - XBOX_THREAD_STACK_SIZE; }
++            n++;
++        }
++    return n;
++}
++/* Park the GPU walk between ticks (1) or let it run (0). Returns 1 once it is
++ * parked, 0 on timeout. With wait_idle, first let it drain to DMA_PUT. */
++int xbox_nv2a_pause(int on, int wait_idle)
++{
++    int i;
++    if (!on) { InterlockedExchange(&g_nv2a_ack_pause, 0); return 1; }
++    if (!g_nv2a_ack_thread) return 1;
++    if (wait_idle && g_nv2a_memory)
++        for (i = 0; i < 2000; i++) {   /* up to ~2 s */
++            uint32_t put = *(volatile uint32_t *)((char *)g_nv2a_memory + NV2A_USER_DMA_PUT);
++            uint32_t get = *(volatile uint32_t *)((char *)g_nv2a_memory + NV2A_USER_DMA_GET);
++            if (put == get && s_ack_last_put == put) break;
++            Sleep(1);
++        }
++    InterlockedExchange(&g_nv2a_ack_pause, 1);
++    for (i = 0; i < 2000; i++) {
++        if (g_nv2a_ack_parked) return 1;
++        Sleep(1);
++    }
++    return 0;
++}
++
++int xbox_layout_snap_regions(XboxSnapRegion *r, int max)
++{
++    int n = 0;
++#define SNAPL(ptr, size, nm) do { if (n < max) { r[n].p = (void *)(ptr); r[n].n = (size); r[n].name = nm; } n++; } while (0)
++    SNAPL(&s_ack_last_put, sizeof s_ack_last_put, "ack.last_put");
++    SNAPL(&s_ack_get_written, sizeof s_ack_get_written, "ack.get_written");
++    SNAPL(&s_ack_put_lo, sizeof s_ack_put_lo, "ack.put_lo");
++    SNAPL(&s_ack_put_hi, sizeof s_ack_put_hi, "ack.put_hi");
++    if (g_nv2a_memory) SNAPL(g_nv2a_memory, XBOX_NV2A_SIZE, "nv2a.mmio");
++    /* The contiguous window is its own mapping, not a mirror of RAM: D3D's
++     * pushbuffer and textures, the kernel data block and the front end's
++     * heaps live there. */
++    if (g_contig_memory) SNAPL(g_contig_memory, XBOX_CONTIG_SIZE, "contig.mem");
++    SNAPL(&g_heap_next, sizeof g_heap_next, "heap.next");
++    SNAPL(&g_heap_alloc_count, sizeof g_heap_alloc_count, "heap.count");
++    SNAPL(g_heap_blocks, sizeof g_heap_blocks, "heap.blocks");
++    SNAPL(&g_heap_block_count, sizeof g_heap_block_count, "heap.nblocks");
++    SNAPL(g_contig_used, sizeof g_contig_used, "contig.used");
++    SNAPL(g_contig_len, sizeof g_contig_len, "contig.len");
++    SNAPL(&g_contig_pages_in_use, sizeof g_contig_pages_in_use, "contig.inuse");
++    SNAPL(&g_contig_high, sizeof g_contig_high, "contig.high");
++    SNAPL(&g_contig_first_free, sizeof g_contig_first_free, "contig.firstfree");
++#undef SNAPL
++    return n;
++}
+diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
+index 67a8792..a4a671a 100644
+--- a/src/kernel/xbox_memory_layout.h
++++ b/src/kernel/xbox_memory_layout.h
+@@ -211,13 +211,16 @@ uint32_t xbox_ContiguousAllocatedBytes(void);
+  * (or claimed). Read without the arena lock; a device model's view. */
+ const volatile uint8_t *xbox_ContiguousPageMap(void);
+ /* MmGetPhysicalAddress named this VA; recorded if it is a heap page below
+- * 64 MB (the image and stacks are not recorded). */
++ * 64 MB, or separately if it is an image page (stacks are not recorded). */
+ void xbox_PhysNoteRamName(uint32_t va);
+ /* One byte per 4 KB physical page below 64 MB, nonzero while the title holds
+  * a RAM name for a heap page there (see xbox_PhysNoteRamName); cleared when
+  * no live heap block covers the page any more. Read without a lock; a device
+  * model's view. */
+ const volatile uint8_t *xbox_PhysRamNameMap(void);
++/* One byte per 4 KB page below 64 MB, nonzero once MmGetPhysicalAddress has
++ * named an image page there (a DMA buffer in .data or BSS). Never cleared. */
++const volatile uint8_t *xbox_PhysImageNameMap(void);
+ uint32_t xbox_ContiguousInUseBytes(void);
+ 
+ int xbox_Nv2aMirrorFence(uint32_t device_ptr_va,
+@@ -560,6 +563,11 @@ uint32_t xbox_AllocThreadStack(void);
+ /* A TIB and TLS block for a newly spawned guest thread, copied from the
+  * template the loader built. Returns the new TIB's Xbox VA, or 0. */
+ uint32_t xbox_AllocThreadTib(void);
++/* Same, for host helper threads that run guest code (APU, OHCI, timer DPCs):
++ * from a pool reserved at load time when RECOMP_HELPER_TIB_POOL=1, so their
++ * start-up does not interleave with guest heap allocations. */
++uint32_t xbox_AllocHelperTib(void);
++extern uint32_t g_helper_tib_pool, g_helper_tib_pool_end;
+ 
+ /**
+  * Return a worker's stack when the worker ends. Takes the value
+diff --git a/src/kernel/xbox_snapshot.h b/src/kernel/xbox_snapshot.h
+new file mode 100644
+index 0000000..949c6e9
+--- /dev/null
++++ b/src/kernel/xbox_snapshot.h
+@@ -0,0 +1,36 @@
++/* Host-side state regions for save states (project hook). Each module lists
++ * the static state that must travel with guest RAM for a restored game to
++ * resume: the pushbuffer walk position, the GPU register shadow, the vertex
++ * program, the kernel's allocator tables, the GPU MMIO page. Diagnostics and
++ * caches are left out. Regions are only valid in the process that listed
++ * them (they are host pointers); a file format must store them by name. */
++#ifndef XBOX_SNAPSHOT_H
++#define XBOX_SNAPSHOT_H
++#include <stddef.h>
++#include <stdint.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++typedef struct { void *p; size_t n; const char *name; } XboxSnapRegion;
++int nv2a_pb_scan_snap_regions(XboxSnapRegion *r, int max);
++int nv2a_pb_exec_snap_regions(XboxSnapRegion *r, int max);
++int nv2a_vsh_snap_regions(XboxSnapRegion *r, int max);
++int xbox_layout_snap_regions(XboxSnapRegion *r, int max);
++int mcpx_apu_snap_regions(XboxSnapRegion *r, int max);
++void mcpx_apu_snap_lock(int on);   /* hold the audio frame thread */
++/* park the GPU walk thread between ticks (on=1; wait_idle: drain to PUT first) / resume (on=0) */
++int xbox_nv2a_pause(int on, int wait_idle);
++/* hold every other guest thread out of guest code (on=1; waits up to timeout_ms for them
++ * to stop, returns 1 when they have) / let them go (on=0) */
++int xbox_snap_gate(int on, int timeout_ms);
++/* open files in the kernel handle table: their read positions, so sequential reads (streamed
++ * music, loading) continue from the saved place after a load */
++typedef struct { uint32_t slot; int64_t pos, size; char path[260]; } XboxSnapFile;
++int xbox_snap_files(XboxSnapFile *f, int max);
++int xbox_snap_files_restore(const XboxSnapFile *f, int n);   /* returns how many were put back */
++/* live worker-thread stacks [lo, hi) in guest VAs; returns the count */
++int xbox_worker_stacks(uint32_t *lo, uint32_t *hi, int max);
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/src/platform/host_time.c b/src/platform/host_time.c
+index 06c6205..4448047 100644
+--- a/src/platform/host_time.c
++++ b/src/platform/host_time.c
+@@ -8,6 +8,7 @@
+  * POSIX: CLOCK_MONOTONIC and nanosleep.
+  */
+ #include "host_time.h"
++#include <errno.h>
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+@@ -82,7 +83,7 @@ void xbox_HostSleepNs(uint64_t ns)
+     {
+         struct timespec ts = { (time_t)(ns / 1000000000u),
+                                (long)(ns % 1000000000u) };
+-        nanosleep(&ts, NULL);
++        while (nanosleep(&ts, &ts) == -1 && errno == EINTR) { }
+     }
+ #endif
+ }
+diff --git a/src/platform/mmio_decode.h b/src/platform/mmio_decode.h
+index 1916156..3c0efda 100644
+--- a/src/platform/mmio_decode.h
++++ b/src/platform/mmio_decode.h
+@@ -30,8 +30,22 @@
+ 
+ #include <stdint.h>
+ 
++#if defined(_WIN32) || (defined(__x86_64__) && defined(MMIO_DECODE_POSIX_CONTEXT))
+ #if defined(_WIN32)
+ #include <windows.h>
++#else
++/* POSIX x86-64: the decoder's view of the register file. The caller fills it
++ * from the signal handler's ucontext and copies it back (apu_mmio_hook.c). */
++typedef struct {
++    uint64_t Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi;
++    uint64_t R8, R9, R10, R11, R12, R13, R14, R15;
++    uint64_t Rip;
++    uint32_t EFlags;
++} MMIO_CONTEXT;
++/* A macro, not a typedef: win32_compat's xbox_winnt.h has its own PCONTEXT. */
++#define PCONTEXT MMIO_CONTEXT *
++#define MMIO_DECODE_UNDEF_PCONTEXT 1
++#endif
+ 
+ /* Service one register access. dev is passed straight back to the callbacks. */
+ typedef uint64_t (*mmio_read_fn)(void *dev, uint32_t off, int size);
+@@ -290,5 +304,8 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+     }
+ }
+ 
+-#endif /* _WIN32 */
++#if defined(MMIO_DECODE_UNDEF_PCONTEXT)
++#undef PCONTEXT
++#endif
++#endif /* _WIN32 || POSIX x86-64 */
+ #endif /* MMIO_DECODE_H */
+diff --git a/src/usb/ohci.c b/src/usb/ohci.c
+index efa5046..b7d0fc9 100644
+--- a/src/usb/ohci.c
++++ b/src/usb/ohci.c
+@@ -1068,7 +1068,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
+ 
+     (void)unused;
+     {
+-        uint32_t tib = xbox_AllocThreadTib();
++        uint32_t tib = xbox_AllocHelperTib();
+         if (!tib) {
+             fprintf(stderr, "  [OHCI0] no TIB for the controller thread; "
+                             "not delivering interrupts\n");
+diff --git a/templates/runtime/recomp_types.h b/templates/runtime/recomp_types.h
+index 6528340..1b892b4 100644
+--- a/templates/runtime/recomp_types.h
++++ b/templates/runtime/recomp_types.h
+@@ -168,6 +168,18 @@ extern uint32_t g_xbox_code_hi;
+ extern RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp;
+ extern RECOMP_TLS uint32_t g_ebx, g_esi, g_edi;
+ 
++/* Stack hygiene (project switch, default 0): when g_recomp_stack_zero is set,
++ * every explicit guest stack allocation (sub/add/and/mov/lea/xchg that lowers
++ * esp, e.g. `sub esp, N` and the _chkstk probe) zeroes the bytes it allocates,
++ * so a read of an uninitialised local yields 0 instead of whatever an earlier
++ * call left there. Off, the lifted code behaves exactly as before (one
++ * predictable branch per such instruction). */
++extern int g_recomp_stack_zero;
++extern RECOMP_TLS uint32_t g_recomp_esp_mark;
++void recomp_stack_zero(uint32_t lo, uint32_t hi);
++#define RECOMP_ESP_MARK() do { if (g_recomp_stack_zero) g_recomp_esp_mark = g_esp; } while (0)
++#define RECOMP_ESP_LOWER() do { if (g_recomp_stack_zero) recomp_stack_zero(g_esp, g_recomp_esp_mark); } while (0)
++
+ /* x87 stack. Per-thread for the same reason the integer registers are:
+  * arguments are passed in st(0)/st(1) across call boundaries. */
+ extern RECOMP_TLS double g_fp_stack[8];
+diff --git a/tests/apu_phys/test_main.c b/tests/apu_phys/test_main.c
+index a5a148f..6ae6933 100644
+--- a/tests/apu_phys/test_main.c
++++ b/tests/apu_phys/test_main.c
+@@ -13,9 +13,10 @@
+  * number does not undo that (D3D names its window pages constantly); freeing
+  * the heap block gives the page back to the window, except a page the freed
+  * block shares with a live neighbour, which goes back once that neighbour is
+- * freed too. Only heap pages are recorded: an image or stack page is never
+- * freed, so its record would never clear (and a voice array at a window
+- * number inside a large image must stay the window). */
++ * freed too. Heap pages go in a record that clears; image pages a title named
++ * (a DMA buffer in .data or BSS) go in one that never does, and an image page
++ * nobody named stays the window (a voice array at a window number inside a
++ * large image). Stack pages are not recorded. */
+ #include "kernel.h"
+ #include "xbox_memory_layout.h"
+ #include "apu_shim.h"
+@@ -118,7 +119,20 @@ int main(int argc, char **argv)
+     xbox_MmGetPhysicalAddress((PVOID)(uintptr_t)g_xbox_image_lo);
+     xbox_MmGetPhysicalAddress((PVOID)(uintptr_t)(XBOX_STACK_BASE + 0x100));
+     check(!xbox_PhysRamNameMap()[g_xbox_image_lo >> 12],
+-          "an image page is not recorded");
++          "an image page is not in the heap record");
++    check(xbox_PhysImageNameMap()[g_xbox_image_lo >> 12] != 0,
++          "a named image page is in the image record");
++    check(!xbox_PhysImageNameMap()[(XBOX_STACK_BASE + 0x100) >> 12],
++          "a stack page is not in the image record");
++    /* An image page the title named reads RAM even where the arena has
++     * handed out the same number (a DMA buffer in BSS); an image page nobody
++     * named keeps the window (a voice array inside a large image). */
++    if (g_xbox_image_hi - g_xbox_image_lo >= 0x2000) {
++        uint32_t lo = g_xbox_image_lo & ~0xFFFu;
++        xbox_ContiguousClaim(XBOX_CONTIG_BASE + lo, 0x2000);
++        check(side(lo + 0x10) == 0, "a named image page over a window page reads RAM");
++        check(side(lo + 0x1010) == 1, "an unnamed image page over a window page reads the window");
++    }
+     check(!xbox_PhysRamNameMap()[(XBOX_STACK_BASE + 0x100) >> 12],
+           "a stack page is not recorded");
+ 
+diff --git a/tools/recomp/difftest.py b/tools/recomp/difftest.py
+new file mode 100644
+index 0000000..b2c3011
+--- /dev/null
++++ b/tools/recomp/difftest.py
+@@ -0,0 +1,503 @@
++"""Differential test of the lifter against a reference x86 CPU (Unicorn).
++
++Each case is a tiny guest function:
++
++    load eax..edi (not esp) and a scratch dword from the state block
++    stc / clc                       ; carry-in for adc/sbb/rcl/inc/dec cases
++    <instruction under test>
++    j<cc> taken  -> state.taken = 1 ; one flag consumer, placed immediately
++    store eax..edi and the scratch dword
++    ret
++
++The same bytes run on Unicorn and, after FunctionTranslator, as compiled C
++against the real runtime header. Registers, memory and the branch outcome
++must agree, except where x86 leaves the result undefined (masked per
++mnemonic). Every mismatch is a lifter bug class like the 8-bit `imul` that
++lost the HUD tint.
++
++    python3 -m tools.recomp.difftest [--cases N] [--seed S] [--only MNEM,...]
++"""
++import argparse
++import os
++import random
++import re
++import subprocess
++import sys
++import tempfile
++from collections import defaultdict
++
++import keystone
++import unicorn
++from unicorn import x86_const as U
++
++from . import config
++from .translator import FunctionTranslator
++
++BASE = 0x10000
++FN_STRIDE = 0x100
++STATE = 0x200000            # in: 7 regs + scratch; out: 7 regs + scratch + taken
++STACK = 0x300000
++REGS = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"]
++SCRATCH = STATE + 0x80
++OUT = STATE + 0x40
++TAKEN = STATE + 0x7C
++HEADER = os.path.join(os.path.dirname(__file__), "..", "..", "templates", "runtime", "recomp_types.h")
++
++JCC = ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"]
++# flags each condition reads
++JCC_FLAGS = {"jo": "O", "jno": "O", "jb": "C", "jae": "C", "je": "Z", "jne": "Z", "jbe": "CZ", "ja": "CZ",
++             "js": "S", "jns": "S", "jp": "P", "jnp": "P", "jl": "SO", "jge": "SO", "jle": "ZSO", "jg": "ZSO"}
++
++EDGE = [0, 1, 2, 0x7F, 0x80, 0x81, 0xFF, 0x100, 0x7FFF, 0x8000, 0x8001, 0xFFFF, 0x10000,
++        0x7FFFFFFF, 0x80000000, 0x80000001, 0xFFFFFFFE, 0xFFFFFFFF, 31, 32, 33, 7, 8, 15, 16]
++
++R8 = ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"]
++R16 = ["ax", "cx", "dx", "bx", "si", "di", "bp"]
++R32 = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"]
++MEMW = {8: "byte ptr", 16: "word ptr", 32: "dword ptr"}
++
++
++def rv(rng):
++    v = rng.choice(EDGE) if rng.random() < 0.4 else rng.getrandbits(32)
++    if rng.random() < 0.2:
++        v ^= rng.getrandbits(8)
++    return v & 0xFFFFFFFF
++
++
++def reg(rng, w):
++    return rng.choice({8: R8, 16: R16, 32: R32}[w])
++
++
++def mem(w):
++    return f"{MEMW[w]} [0x{SCRATCH:x}]"
++
++
++# ---------------- instruction generators: (asm, defined-flags, notes) ----------------
++ALL = "CZSOP"
++
++
++def g_alu(m):
++    def f(rng):
++        w = rng.choice([8, 16, 32]); k = rng.random()
++        if k < 0.4: ops = f"{reg(rng, w)}, {reg(rng, w)}"
++        elif k < 0.6: ops = f"{reg(rng, w)}, {rv(rng) & ((1 << w) - 1)}"
++        elif k < 0.8: ops = f"{mem(w)}, {reg(rng, w)}"
++        else: ops = f"{reg(rng, w)}, {mem(w)}"
++        return f"{m} {ops}", ALL
++    return f
++
++
++def g_unary(m, flags):
++    def f(rng):
++        w = rng.choice([8, 16, 32])
++        return f"{m} {reg(rng, w) if rng.random() < 0.7 else mem(w)}", flags
++    return f
++
++
++def g_shift(m):
++    def f(rng):
++        w = rng.choice([8, 16, 32])
++        dst = reg(rng, w) if rng.random() < 0.8 else mem(w)
++        if dst.startswith("cl") or dst.startswith("ch") or dst in ("cx", "ecx"):
++            dst = mem(w)
++        k = rng.random()
++        if k < 0.3: cnt, c = "1", 1
++        elif k < 0.7: c = rng.choice([0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, rng.randrange(32)]); cnt = str(c)
++        else: cnt, c = "cl", None
++        return f"{m} {dst}, {cnt}", ("SHIFT", m, w, c)
++    return f
++
++
++def g_double_shift(m):
++    def f(rng):
++        w = rng.choice([16, 32])
++        a, b = reg(rng, w), reg(rng, w)
++        c = rng.choice([0, 1, 2, 7, 8, 15, 16, 17, 31])
++        return f"{m} {a}, {b}, {c}", ("DSHIFT", m, w, c)
++    return f
++
++
++def g_muldiv1(m):
++    def f(rng):
++        w = rng.choice([8, 16, 32])
++        src = reg(rng, w) if rng.random() < 0.7 else mem(w)
++        return f"{m} {src}", ("MULDIV", m, w)
++    return f
++
++
++def g_imul23(rng):
++    w = rng.choice([16, 32])
++    if rng.random() < 0.5:
++        return f"imul {reg(rng, w)}, {reg(rng, w) if rng.random() < 0.7 else mem(w)}", "CO"
++    imm = rng.choice([3, 7, -1, 100, 0x7F, -128, 1000, 0x1234])
++    return f"imul {reg(rng, w)}, {reg(rng, w)}, {imm}", "CO"
++
++
++def g_movx(m):
++    def f(rng):
++        w = rng.choice([16, 32]); sw = rng.choice([8, 16]) if w == 32 else 8
++        src = reg(rng, sw) if rng.random() < 0.7 else mem(sw)
++        return f"{m} {reg(rng, w)}, {src}", ""
++    return f
++
++
++def g_bt(m):
++    def f(rng):
++        w = rng.choice([16, 32])
++        if rng.random() < 0.5: src = str(rng.randrange(w))
++        else: src = reg(rng, w)
++        dst = reg(rng, w)
++        return f"{m} {dst}, {src}", "C"
++    return f
++
++
++def g_bs(m):
++    def f(rng):
++        w = rng.choice([16, 32])
++        return f"{m} {reg(rng, w)}, {reg(rng, w)}", ("BS", m)
++    return f
++
++
++def g_misc(rng):
++    k = rng.choice(["bswap", "xchg", "xchgm", "lea", "not", "cdq", "cwde", "cbw", "cwd", "setcmp", "cmov", "xadd",
++                    "cmpxchg", "sahf", "lahf", "movsx_self", "neg"])
++    if k == "bswap": return f"bswap {reg(rng, 32)}", ""
++    if k == "xchg": w = rng.choice([8, 16, 32]); return f"xchg {reg(rng, w)}, {reg(rng, w)}", ""
++    if k == "xchgm": w = rng.choice([8, 16, 32]); return f"xchg {mem(w)}, {reg(rng, w)}", ""
++    if k == "lea": return f"lea {reg(rng, 32)}, [{reg(rng, 32)} + {reg(rng, 32)}*{rng.choice([1, 2, 4, 8])} + {rng.randrange(-200, 200)}]", ""
++    if k == "not": w = rng.choice([8, 16, 32]); return f"not {reg(rng, w)}", ""
++    if k == "cdq": return "cdq", ""
++    if k == "cwde": return "cwde", ""
++    if k == "cbw": return "cbw", ""
++    if k == "cwd": return "cwd", ""
++    if k == "setcmp":
++        w = rng.choice([8, 16, 32]); cc = rng.choice(JCC)[1:]
++        return f"cmp {reg(rng, w)}, {reg(rng, w)}\nset{cc} {reg(rng, 8)}", ALL
++    if k == "cmov":
++        w = rng.choice([16, 32]); cc = rng.choice(JCC)[1:]
++        return f"cmp {reg(rng, 32)}, {reg(rng, 32)}\ncmov{cc} {reg(rng, w)}, {reg(rng, w)}", ALL
++    if k == "xadd": w = rng.choice([8, 16, 32]); return f"xadd {reg(rng, w)}, {reg(rng, w)}", ALL
++    if k == "cmpxchg": w = rng.choice([8, 16, 32]); return f"cmpxchg {mem(w)}, {reg(rng, w)}", "Z"
++    if k == "sahf": return "sahf", "CZSP"
++    if k == "lahf": return "lahf", ""
++    if k == "movsx_self": return f"movsx {rng.choice(R32)}, {rng.choice(['al', 'ah', 'cl', 'ch'])}", ""
++    return f"neg {reg(rng, rng.choice([8, 16, 32]))}", ALL
++
++
++GENS = {
++    "add": g_alu("add"), "adc": g_alu("adc"), "sub": g_alu("sub"), "sbb": g_alu("sbb"), "cmp": g_alu("cmp"),
++    "and": g_alu("and"), "or": g_alu("or"), "xor": g_alu("xor"), "test": g_alu("test"),
++    "inc": g_unary("inc", "ZSOP"), "dec": g_unary("dec", "ZSOP"), "neg": g_unary("neg", ALL), "not": g_unary("not", ""),
++    "shl": g_shift("shl"), "shr": g_shift("shr"), "sar": g_shift("sar"), "rol": g_shift("rol"), "ror": g_shift("ror"),
++    "rcl": g_shift("rcl"), "rcr": g_shift("rcr"),
++    "shld": g_double_shift("shld"), "shrd": g_double_shift("shrd"),
++    "mul": g_muldiv1("mul"), "imul1": g_muldiv1("imul"), "div": g_muldiv1("div"), "idiv": g_muldiv1("idiv"),
++    "imul23": g_imul23, "movsx": g_movx("movsx"), "movzx": g_movx("movzx"),
++    "bt": g_bt("bt"), "bts": g_bt("bts"), "btr": g_bt("btr"), "btc": g_bt("btc"),
++    "bsf": g_bs("bsf"), "bsr": g_bs("bsr"), "misc": g_misc,
++}
++
++
++def defined_flags(spec, regs_in, scratch_in, cf_in, asm):
++    """Flags x86 defines for this instance (others are masked)."""
++    if isinstance(spec, str):
++        return spec
++    kind = spec[0]
++    if kind in ("SHIFT", "DSHIFT"):
++        _, m, w, c = spec
++        if c is None:
++            c = regs_in[1] & 0xFF                  # cl
++        c &= 31
++        if m in ("rcl", "rcr"):
++            if w == 8: c %= 9
++            elif w == 16: c %= 17
++        if c == 0:
++            return "CZSOP"                         # flags unchanged: all must match the input
++        if m in ("rol", "ror", "rcl", "rcr"):
++            return "CO" if c == 1 else "C"
++        if kind == "DSHIFT" and c > w:
++            return ""
++        if m in ("shl", "shr") and c > w:
++            return "ZSP"
++        return "CZSOP" if c == 1 else "CZSP"
++    if kind == "MULDIV":
++        return "CO" if spec[1] in ("mul", "imul") else ""
++    if kind == "BS":
++        return "Z"
++    return ALL
++
++
++def build_case(rng, gen_name):
++    body, spec = GENS[gen_name](rng)
++    regs_in = [rv(rng) for _ in REGS]
++    scratch = rv(rng)
++    cf_in = rng.random() < 0.5
++    jcc = rng.choice(JCC)
++    # avoid faulting divides: make the divisor safe and the quotient fit
++    if body.startswith(("div ", "idiv ")):
++        return None
++    return dict(gen=gen_name, body=body, spec=spec, regs=regs_in, scratch=scratch, cf=cf_in, jcc=jcc)
++
++
++def fix_divide(case, rng):
++    """Divides: pick operands whose quotient fits (x86 faults otherwise)."""
++    m, src = case["body"].split(" ", 1)
++    w = 8 if src.startswith(("byte", "al", "cl", "dl", "bl", "ah", "ch", "dh", "bh")) and not src.startswith("bp") else None
++    if w is None:
++        w = 16 if (src.startswith("word") or src in R16) else 32
++    return case
++
++
++def asm_for(case, idx):
++    lines = []
++    for i, r in enumerate(REGS):
++        lines.append(f"mov {r}, dword ptr [0x{STATE + 4 * i:x}]")
++    lines.append("stc" if case["cf"] else "clc")
++    lines.extend(case["body"].split("\n"))
++    lines.append(f"{case['jcc']} L_t{idx}")
++    lines.append(f"mov byte ptr [0x{TAKEN:x}], 0")
++    lines.append(f"jmp L_d{idx}")
++    lines.append(f"L_t{idx}:")
++    lines.append(f"mov byte ptr [0x{TAKEN:x}], 1")
++    lines.append(f"L_d{idx}:")
++    for i, r in enumerate(REGS):
++        lines.append(f"mov dword ptr [0x{OUT + 4 * i:x}], {r}")
++    lines.append("ret")
++    return "\n".join(lines)
++
++
++def run_unicorn(code, addr, case):
++    mu = unicorn.Uc(unicorn.UC_ARCH_X86, unicorn.UC_MODE_32)
++    mu.mem_map(0, 0x400000)
++    mu.mem_write(addr, code)
++    for i, v in enumerate(case["regs"]):
++        mu.mem_write(STATE + 4 * i, v.to_bytes(4, "little"))
++    mu.mem_write(SCRATCH, case["scratch"].to_bytes(4, "little"))
++    mu.reg_write(U.UC_X86_REG_ESP, STACK - 4)
++    mu.mem_write(STACK - 4, (0x0FFF0).to_bytes(4, "little"))
++    try:
++        mu.emu_start(addr, 0x0FFF0, count=10000)
++    except unicorn.UcError as e:
++        return None
++    out = [int.from_bytes(mu.mem_read(OUT + 4 * i, 4), "little") for i in range(len(REGS))]
++    sc = int.from_bytes(mu.mem_read(SCRATCH, 4), "little")
++    taken = mu.mem_read(TAKEN, 1)[0]
++    return out, sc, taken
++
++
++HARNESS_TOP = r"""
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++#include <unistd.h>
++#include <sys/wait.h>
++#define RECOMP_GENERATED_CODE
++#include "recomp_types.h"
++ptrdiff_t g_xbox_mem_offset;
++int g_force_return;
++uint32_t g_xbox_code_lo = 0x10000, g_xbox_code_hi = 0x100000;
++RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp, g_ebx, g_esi, g_edi, g_ebp, g_fs_base, g_seh_ebp, g_eflags, g_recomp_esp_mark, g_mxcsr = 0x1F80;
++RECOMP_TLS int g_df, g_fp_top, g_fp_cmp;
++RECOMP_TLS double g_fp_stack[8];
++RECOMP_TLS uint16_t g_fp_control_word = 0x027F, g_fp_cc;
++int g_recomp_stack_zero;
++RECOMP_TLS RecompXmm g_xmm0, g_xmm1, g_xmm2, g_xmm3, g_xmm4, g_xmm5, g_xmm6, g_xmm7;
++RECOMP_TLS RecompMmx g_mm0, g_mm1, g_mm2, g_mm3, g_mm4, g_mm5, g_mm6, g_mm7;
++volatile uint32_t g_icall_trace[ICALL_TRACE_SIZE], g_icall_trace_idx;
++volatile uint64_t g_icall_count, g_icall_guard_hits, g_icall_guard_misses;
++int32_t g_xbox_guest_cpu_preempt;
++"""
++
++
++def compile_and_run(cases, funcs_c, tmp):
++    src = os.path.join(tmp, "h.c")
++    with open(src, "w") as f:
++        f.write(HARNESS_TOP)
++        f.write(funcs_c)
++        f.write("\nstatic const uint32_t IN[][9] = {\n")
++        for c in cases:
++            f.write("{" + ",".join(f"0x{v:08X}u" for v in c["regs"]) + f",0x{c['scratch']:08X}u,0}},\n")
++        f.write("};\ntypedef void (*fn_t)(void);\nstatic fn_t FN[] = {\n")
++        for i, _ in enumerate(cases):
++            f.write(f"t_{i},\n")
++        f.write("""};
++int main(void) {
++    uint8_t *m = calloc(1, 0x400000);
++    size_t i; int r;
++    g_xbox_mem_offset = (ptrdiff_t)(uintptr_t)m;
++    for (i = 0; i < sizeof FN / sizeof FN[0]; i++) {
++        memset(m + 0x200000, 0, 0x100);
++        for (r = 0; r < 7; r++) memcpy(m + 0x200000 + 4 * r, &IN[i][r], 4);
++        memcpy(m + 0x200080, &IN[i][7], 4);
++        g_esp = 0x300000 - 4;
++        fflush(stdout);
++        {
++            pid_t pid = fork();
++            if (pid == 0) {
++                FN[i]();
++                printf("%zu", i);
++                for (r = 0; r < 7; r++) { uint32_t v; memcpy(&v, m + 0x200040 + 4 * r, 4); printf(" %08X", v); }
++                { uint32_t v; memcpy(&v, m + 0x200080, 4); printf(" %08X %u\\n", v, m[0x20007C]); }
++                fflush(stdout);
++                _exit(0);
++            }
++            waitpid(pid, NULL, 0);
++            continue;
++        }
++        printf("%zu", i);
++        for (r = 0; r < 7; r++) { uint32_t v; memcpy(&v, m + 0x200040 + 4 * r, 4); printf(" %08X", v); }
++        { uint32_t v; memcpy(&v, m + 0x200080, 4); printf(" %08X %u\\n", v, m[0x20007C]); }
++    }
++    return 0;
++}
++""")
++    exe = os.path.join(tmp, "h")
++    inc = os.path.dirname(os.path.abspath(HEADER))
++    r = subprocess.run(["gcc", "-O1", "-w", "-I", inc, src, "-o", exe, "-lm", "-Wl,--unresolved-symbols=ignore-all"],
++                       capture_output=True, text=True)
++    if r.returncode:
++        return None, r.stderr[-4000:]
++    r = subprocess.run([exe], capture_output=True, text=True, timeout=120)
++    res = {}
++    for line in r.stdout.splitlines():
++        p = line.split()
++        if len(p) == 10:
++            res[int(p[0])] = ([int(x, 16) for x in p[1:8]], int(p[8], 16), int(p[9]))
++    return res, r.stderr
++
++
++def width_of_written(body):
++    return None
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--cases", type=int, default=40)
++    ap.add_argument("--seed", type=int, default=1)
++    ap.add_argument("--only", default="")
++    ap.add_argument("--show", type=int, default=4)
++    a = ap.parse_args()
++    rng = random.Random(a.seed)
++    ks = keystone.Ks(keystone.KS_ARCH_X86, keystone.KS_MODE_32)
++    gens = [g for g in GENS if not a.only or g in a.only.split(",")]
++    cases = []
++    for g in gens:
++        for _ in range(a.cases):
++            c = build_case(rng, g)
++            if c is None:
++                c = divide_case(rng, g)
++            if c: cases.append(c)
++    image = bytearray(b"\xcc" * (FN_STRIDE * len(cases) + 0x100))
++    db = {}
++    keep = []
++    for i, c in enumerate(cases):
++        addr = BASE + FN_STRIDE * len(keep)
++        try:
++            code, _ = ks.asm(asm_for(c, len(keep)), addr)
++        except keystone.KsError:
++            continue
++        code = bytes(code)
++        if len(code) > FN_STRIDE:
++            continue
++        c["code"] = code; c["addr"] = addr
++        image[addr - BASE:addr - BASE + len(code)] = code
++        name = f"t_{len(keep)}"
++        db[addr] = {"_addr": addr, "start": hex(addr), "end": addr + len(code), "size": len(code),
++                    "section": ".text", "name": name}
++        keep.append(c)
++    cases = keep
++    config._SECTIONS = [config.Section(".text", BASE, len(image), 0, len(image), True)]
++    tr = FunctionTranslator(bytes(image), db)
++    funcs = []
++    lift_issues = defaultdict(int)
++    for c in cases:
++        txt = tr.translate_function(c["addr"], db[c["addr"]])
++        c["c"] = txt
++        for u in re.findall(r'RECOMP_UNIMPL\("([a-z0-9]+)', txt):
++            lift_issues[u] += 1
++        funcs.append(txt)
++    with tempfile.TemporaryDirectory() as tmp:
++        res, err = compile_and_run(cases, "\n".join(funcs), tmp)
++    if res is None:
++        print("compile failed:\n" + err)
++        return 2
++    bad = defaultdict(list)
++    for i, c in enumerate(cases):
++        ref = run_unicorn(c["code"], c["addr"], c)
++        if ref is None or i not in res:
++            if i not in res: bad[(c["gen"], "no-result")].append((c, ref, None))
++            continue
++        got = res[i]
++        flags = defined_flags(c["spec"], c["regs"], c["scratch"], c["cf"], c["body"])
++        problems = []
++        undefined_dest = (isinstance(c["spec"], tuple) and c["spec"][0] == "BS")
++        if got[0] != ref[0] and not undefined_dest:
++            diff = [REGS[k] for k in range(7) if got[0][k] != ref[0][k]]
++            problems.append("regs:" + ",".join(diff))
++        if got[1] != ref[1]:
++            problems.append("mem")
++        if c["spec"] == "" or c["body"].split()[0] in ("cwde", "cwd", "cdq", "cbw", "lahf", "bswap", "lea", "not", "xchg", "movsx", "movzx"):
++            flags = "C"                     # flags come from stc/clc only
++        if got[2] != ref[2] and set(JCC_FLAGS[c["jcc"]]) <= set(flags):
++            problems.append("flag:" + c["jcc"])
++        if problems:
++            key = (c["gen"], " ".join(sorted(set(p.split(":")[0] + (":" + p.split(":")[1] if p.startswith("flag") else "") for p in problems))))
++            bad[key].append((c, ref, got, problems))
++    total = len(cases)
++    nbad = sum(len(v) for v in bad.values())
++    print(f"{total} cases, {nbad} mismatches in {len(bad)} groups")
++    if lift_issues:
++        print("unimplemented in lifter:", dict(lift_issues))
++    for key, items in sorted(bad.items(), key=lambda kv: -len(kv[1])):
++        print(f"\n== {key[0]} [{key[1]}]: {len(items)}")
++        for it in items[:a.show]:
++            c, ref, got = it[0], it[1], it[2]
++            print(f"  {c['body'].replace(chr(10), '; ')} ; {c['jcc']}  cf_in={int(c['cf'])}")
++            print("    in : " + " ".join(f"{r}={v:08X}" for r, v in zip(REGS, c["regs"])) + f" mem={c['scratch']:08X}")
++            if ref: print("    x86: " + " ".join(f"{v:08X}" for v in ref[0]) + f" mem={ref[1]:08X} taken={ref[2]}")
++            if got: print("    C  : " + " ".join(f"{v:08X}" for v in got[0]) + f" mem={got[1]:08X} taken={got[2]}")
++    return 0
++
++
++def divide_case(rng, g):
++    """div/idiv with operands chosen so the quotient fits (no #DE)."""
++    m = g
++    w = rng.choice([8, 16, 32])
++    regs = [rv(rng) for _ in REGS]
++    scratch = rv(rng)
++    if w == 8:
++        d = rng.randrange(1, 256)
++        src_r = rng.choice(["cl", "bl", "dl", "ch", "bh", "dh"])
++        idx = {"cl": 1, "bl": 3, "dl": 2, "ch": 1, "bh": 3, "dh": 2}[src_r]
++        sh = 8 if src_r.endswith("h") else 0
++        if m == "idiv": d = rng.choice([1, 2, 3, 7, 100, 127]) * rng.choice([1, -1])
++        regs[idx] = (regs[idx] & ~(0xFF << sh)) | ((d & 0xFF) << sh)
++        q = rng.randrange(0, 128); r = rng.randrange(0, abs(d))
++        n = q * abs(d) + r
++        if m == "idiv" and rng.random() < 0.5: n = -n
++        regs[0] = (regs[0] & 0xFFFF0000) | (n & 0xFFFF)
++        body = f"{m} {src_r}"
++    elif w == 16:
++        d = rng.randrange(1, 0x8000)
++        regs[1] = (regs[1] & 0xFFFF0000) | d
++        q = rng.randrange(0, 0x8000); r = rng.randrange(0, d); n = q * d + r
++        if m == "idiv" and rng.random() < 0.5: n = -n
++        n &= 0xFFFFFFFF
++        regs[0] = (regs[0] & 0xFFFF0000) | (n & 0xFFFF); regs[2] = (regs[2] & 0xFFFF0000) | (n >> 16)
++        body = f"{m} cx"
++    else:
++        d = rng.randrange(1, 0x7FFFFFFF)
++        regs[1] = d
++        q = rng.randrange(0, 0x7FFFFFFF); r = rng.randrange(0, d); n = q * d + r
++        if m == "idiv" and rng.random() < 0.5: n = -n
++        n &= 0xFFFFFFFFFFFFFFFF
++        regs[0] = n & 0xFFFFFFFF; regs[2] = n >> 32
++        body = f"{m} ecx"
++    return dict(gen=g, body=body, spec=("MULDIV", m, w), regs=regs, scratch=scratch, cf=rng.random() < 0.5,
++                jcc=rng.choice(JCC))
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tools/recomp/difftest_fp.py b/tools/recomp/difftest_fp.py
+new file mode 100644
+index 0000000..25ffaa6
+--- /dev/null
++++ b/tools/recomp/difftest_fp.py
+@@ -0,0 +1,404 @@
++"""Differential test of the lifter's SSE / MMX / x87 translation against Unicorn.
++
++Same idea as difftest.py, for floating point and SIMD. State block:
++  0x200000  eax..ebp in            0x200040  eax..ebp out
++  0x200100  xmm0..xmm3 in (64 B)   0x200180  xmm0..xmm3 out
++  0x200140  mm0, mm1 in            0x2001C0  mm0, mm1 out
++  0x200150  memory operand (16 B)  0x2001D0  x87 results (fstp targets, 16 B)
++  0x20007C  branch taken
++Floats compare bit-exactly except: any NaN matches any NaN; x87 results may
++differ by 1 ulp (the lifter evaluates x87 in double, the CPU in extended);
++rcpss/rsqrtss are approximations (relative 2^-11).
++
++    python3 -m tools.recomp.difftest_fp [--cases N] [--only GROUP,...]
++"""
++import argparse
++import math
++import os
++import random
++import re
++import struct
++import subprocess
++import sys
++import tempfile
++from collections import defaultdict
++
++import keystone
++import unicorn
++from unicorn import x86_const as U
++
++from . import config
++from .translator import FunctionTranslator
++from . import difftest as D
++
++S = 0x200000
++XIN, XOUT, MIN, MOUT, MOP, FOUT = S + 0x100, S + 0x180, S + 0x140, S + 0x1C0, S + 0x150, S + 0x1D0
++FEDGE = [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.0, 3.0, 0.1, -0.1, 100.0, -100.0, 1e-3, 1e10, -1e10, 1e30, 1e-30,
++         65535.0, 65536.5, -2147483648.0, 2147483520.0, 1.5, 2.5, -2.5, 0.49999997, float("inf"), float("-inf"), 3.4e38,
++         1.17549435e-38, 1e-40, float("nan")]
++
++
++def f2u(f):
++    return struct.unpack("<I", struct.pack("<f", f))[0]
++
++
++def u2f(u):
++    return struct.unpack("<f", struct.pack("<I", u & 0xFFFFFFFF))[0]
++
++
++def rf(rng, edge=0.4, finite=False):
++    if rng.random() < edge:
++        f = rng.choice(FEDGE)
++        if finite and (math.isinf(f) or math.isnan(f)):
++            f = 1.0
++        return f2u(f)
++    e = rng.choice([rng.uniform(-1, 1), rng.uniform(-1000, 1000), rng.uniform(-1e6, 1e6), rng.gauss(0, 10)])
++    return f2u(e)
++
++
++XM = ["xmm0", "xmm1", "xmm2", "xmm3"]
++MM = ["mm0", "mm1"]
++MOPS = f"[0x{MOP:x}]"
++SSE_SCALAR = ["addss", "subss", "mulss", "divss", "minss", "maxss", "sqrtss", "movss", "rcpss", "rsqrtss"]
++SSE_PACKED = ["addps", "subps", "mulps", "divps", "minps", "maxps", "andps", "orps", "xorps", "andnps", "movaps",
++              "unpcklps", "unpckhps", "sqrtps"]
++MMX = ["paddw", "paddd", "paddb", "psubw", "psubd", "pmullw", "pmulhw", "pmaddwd", "pand", "pandn", "por", "pxor",
++       "punpcklbw", "punpcklwd", "punpckldq", "punpckhbw", "punpckhwd", "punpckhdq", "packssdw", "packsswb", "packuswb",
++       "pcmpeqw", "pcmpgtw", "paddsw", "paddusb", "psubusb", "pavgb", "pmaxsw", "pminsw"]
++MMX_SH = ["psraw", "psrad", "psrlw", "psrld", "psrlq", "psllw", "pslld", "psllq"]
++
++
++def g_sse_scalar(rng):
++    m = rng.choice(SSE_SCALAR)
++    src = rng.choice(XM) if rng.random() < 0.7 else "dword ptr " + MOPS
++    return f"{m} {rng.choice(XM)}, {src}", ("approx" if m in ("rcpss", "rsqrtss") else "exact")
++
++
++def g_sse_packed(rng):
++    m = rng.choice(SSE_PACKED)
++    src = rng.choice(XM) if rng.random() < 0.7 else "xmmword ptr " + MOPS
++    return f"{m} {rng.choice(XM)}, {src}", "exact"
++
++
++def g_shufps(rng):
++    return f"shufps {rng.choice(XM)}, {rng.choice(XM)}, {rng.randrange(256)}", "exact"
++
++
++def g_movlh(rng):
++    m = rng.choice(["movlps", "movhps"])
++    if rng.random() < 0.5:
++        return f"{m} {rng.choice(XM)}, qword ptr {MOPS}", "exact"
++    return f"{m} qword ptr {MOPS}, {rng.choice(XM)}", "exact"
++
++
++def g_comi(rng):
++    m = rng.choice(["comiss", "ucomiss"])
++    src = rng.choice(XM) if rng.random() < 0.7 else "dword ptr " + MOPS
++    jcc = rng.choice(["ja", "jae", "jb", "jbe", "je", "jne", "jp", "jnp"])
++    return f"{m} {rng.choice(XM)}, {src}", ("flags", jcc)
++
++
++def g_cvt(rng):
++    k = rng.choice(["cvtsi2ss", "cvttss2si", "cvtss2si", "cvtsi2ss_m", "cvttss2si_m"])
++    if k == "cvtsi2ss": return f"cvtsi2ss {rng.choice(XM)}, {rng.choice(D.R32)}", "exact"
++    if k == "cvtsi2ss_m": return f"cvtsi2ss {rng.choice(XM)}, dword ptr {MOPS}", "exact"
++    if k == "cvttss2si": return f"cvttss2si {rng.choice(D.R32)}, {rng.choice(XM)}", "exact"
++    if k == "cvtss2si": return f"cvtss2si {rng.choice(D.R32)}, {rng.choice(XM)}", "exact"
++    return f"cvttss2si {rng.choice(D.R32)}, dword ptr {MOPS}", "exact"
++
++
++def g_mmx(rng):
++    m = rng.choice(MMX)
++    src = rng.choice(MM) if rng.random() < 0.7 else "qword ptr " + MOPS
++    return f"{m} {rng.choice(MM)}, {src}", "exact"
++
++
++def g_mmx_shift(rng):
++    m = rng.choice(MMX_SH)
++    cnt = str(rng.choice([0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, rng.randrange(80)])) if rng.random() < 0.7 else rng.choice(MM)
++    return f"{m} {rng.choice(MM)}, {cnt}", "exact"
++
++
++def g_mmx_misc(rng):
++    k = rng.choice(["movd_r", "movd_x", "pshufw", "movq"])
++    if k == "movd_r": return f"movd {rng.choice(D.R32)}, {rng.choice(MM)}", "exact"
++    if k == "movd_x": return f"movd {rng.choice(MM)}, {rng.choice(D.R32)}", "exact"
++    if k == "pshufw": return f"pshufw {rng.choice(MM)}, {rng.choice(MM)}, {rng.randrange(256)}", "exact"
++    return f"movq {rng.choice(MM)}, qword ptr {MOPS}", "exact"
++
++
++# x87: operands come from the memory operand slot (two floats at MOP, MOP+4) and int at MOP+8
++def g_x87_arith(rng):
++    m = rng.choice(["fadd", "fsub", "fsubr", "fmul", "fdiv", "fdivr"])
++    form = rng.choice(["st", "mem", "p"])
++    if form == "mem":
++        body = f"fld dword ptr [0x{MOP:x}]\n{m} dword ptr [0x{MOP + 4:x}]\nfstp dword ptr [0x{FOUT:x}]"
++    elif form == "st":
++        body = f"fld dword ptr [0x{MOP:x}]\nfld dword ptr [0x{MOP + 4:x}]\n{m} st(0), st(1)\nfstp dword ptr [0x{FOUT:x}]\nfstp dword ptr [0x{FOUT + 4:x}]"
++    else:
++        body = f"fld dword ptr [0x{MOP:x}]\nfld dword ptr [0x{MOP + 4:x}]\n{m}p st(1), st(0)\nfstp dword ptr [0x{FOUT:x}]"
++    return body, "x87"
++
++
++def g_x87_unary(rng):
++    m = rng.choice(["fsqrt", "fabs", "fchs", "fsin", "fcos", "frndint"])
++    return f"fld dword ptr [0x{MOP:x}]\n{m}\nfstp dword ptr [0x{FOUT:x}]", ("x87trig" if m in ("fsin", "fcos") else "x87")
++
++
++def g_x87_binary_special(rng):
++    m = rng.choice(["fpatan", "fyl2x", "fscale", "fprem"])
++    return f"fld dword ptr [0x{MOP:x}]\nfld dword ptr [0x{MOP + 4:x}]\n{m}\nfstp dword ptr [0x{FOUT:x}]", "x87trig"
++
++
++def g_x87_int(rng):
++    k = rng.choice(["fistp", "fild", "fistp_rc", "fist16"])
++    if k == "fistp": return f"fld dword ptr [0x{MOP:x}]\nfistp dword ptr [0x{FOUT:x}]", "x87int"
++    if k == "fild": return f"fild dword ptr [0x{MOP + 8:x}]\nfstp dword ptr [0x{FOUT:x}]", "x87"
++    if k == "fist16": return f"fld dword ptr [0x{MOP:x}]\nfistp word ptr [0x{FOUT:x}]", "x87int"
++    # truncating rounding control, as MSVC's _ftol does
++    return (f"fnstcw word ptr [0x{FOUT + 12:x}]\nmov ax, word ptr [0x{FOUT + 12:x}]\nor ax, 0x0C00\n"
++            f"mov word ptr [0x{FOUT + 14:x}], ax\nfldcw word ptr [0x{FOUT + 14:x}]\n"
++            f"fld dword ptr [0x{MOP:x}]\nfistp dword ptr [0x{FOUT:x}]\nfldcw word ptr [0x{FOUT + 12:x}]"), "x87int"
++
++
++def g_x87_cmp(rng):
++    k = rng.choice(["fcomip", "fucomip", "fcomp_sahf", "fcomp_test"])
++    jcc = rng.choice(["ja", "jae", "jb", "jbe", "je", "jne", "jp", "jnp"])
++    if k in ("fcomip", "fucomip"):
++        return (f"fld dword ptr [0x{MOP + 4:x}]\nfld dword ptr [0x{MOP:x}]\n{k} st(0), st(1)\nfstp st(0)", ("flags", jcc))
++    if k == "fcomp_sahf":
++        return (f"fld dword ptr [0x{MOP:x}]\nfcomp dword ptr [0x{MOP + 4:x}]\nfnstsw ax\nsahf", ("flags", jcc))
++    mask = rng.choice([0x41, 0x01, 0x40, 0x05, 0x44, 0x45])
++    jcc = rng.choice(["je", "jne", "jp", "jnp"])
++    return (f"fld dword ptr [0x{MOP:x}]\nfcomp dword ptr [0x{MOP + 4:x}]\nfnstsw ax\ntest ah, {mask}", ("flags", jcc))
++
++
++GENS = {"sse_scalar": g_sse_scalar, "sse_packed": g_sse_packed, "shufps": g_shufps, "movlh": g_movlh,
++        "comi": g_comi, "cvt": g_cvt, "mmx": g_mmx, "mmx_shift": g_mmx_shift, "mmx_misc": g_mmx_misc,
++        "x87_arith": g_x87_arith, "x87_unary": g_x87_unary, "x87_special": g_x87_binary_special,
++        "x87_int": g_x87_int, "x87_cmp": g_x87_cmp}
++
++
++def make_case(rng, g):
++    body, kind = GENS[g](rng)
++    mem = [rf(rng) for _ in range(4)]
++    if g == "x87_int" or g == "cvt":
++        mem[2] = D.rv(rng)
++        if rng.random() < 0.5: mem[0] = f2u(rng.choice([0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 3.7, -3.7, 1e9, -1e9, 0.49999997, 123456.7, -0.0]))
++    if g.startswith("mmx"):
++        mem = [D.rv(rng) for _ in range(4)]
++    x = [rf(rng) if not g.startswith("mmx") else D.rv(rng) for _ in range(16)]
++    mmv = [D.rv(rng) for _ in range(4)]
++    regs = [D.rv(rng) for _ in D.REGS]
++    if g == "cvt" and rng.random() < 0.5:
++        regs = [rng.choice([0, 1, -1 & 0xFFFFFFFF, 0x7FFFFFFF, 0x80000000, 16777217, 123456789, 0xFFFFFF00]) for _ in D.REGS]
++    jcc = kind[1] if isinstance(kind, tuple) else "jb"
++    return dict(gen=g, body=body, kind=kind, regs=regs, xmm=x, mm=mmv, mem=mem, jcc=jcc)
++
++
++def asm_for(c, i):
++    L = [f"mov {r}, dword ptr [0x{S + 4 * k:x}]" for k, r in enumerate(D.REGS)]
++    L += [f"movups {x}, xmmword ptr [0x{XIN + 16 * k:x}]" for k, x in enumerate(XM)]
++    L += [f"movq mm{k}, qword ptr [0x{MIN + 8 * k:x}]" for k in range(2)]
++    L += ["clc"]
++    L += c["body"].split("\n")
++    L += [f"{c['jcc']} L_t{i}", f"mov byte ptr [0x{D.TAKEN:x}], 0", f"jmp L_d{i}", f"L_t{i}:",
++          f"mov byte ptr [0x{D.TAKEN:x}], 1", f"L_d{i}:"]
++    L += [f"movups xmmword ptr [0x{XOUT + 16 * k:x}], {x}" for k, x in enumerate(XM)]
++    L += [f"movq qword ptr [0x{MOUT + 8 * k:x}], mm{k}" for k in range(2)]
++    L += ["emms"]
++    L += [f"mov dword ptr [0x{D.OUT + 4 * k:x}], {r}" for k, r in enumerate(D.REGS)]
++    L += ["ret"]
++    return "\n".join(L)
++
++
++def init_bytes(c):
++    b = bytearray(0x200)
++    for k, v in enumerate(c["regs"]): b[4 * k:4 * k + 4] = v.to_bytes(4, "little")
++    for k, v in enumerate(c["xmm"]): b[0x100 + 4 * k:0x104 + 4 * k] = v.to_bytes(4, "little")
++    for k, v in enumerate(c["mm"]): b[0x140 + 4 * k:0x144 + 4 * k] = v.to_bytes(4, "little")
++    for k, v in enumerate(c["mem"]): b[0x150 + 4 * k:0x154 + 4 * k] = v.to_bytes(4, "little")
++    return bytes(b)
++
++
++def run_unicorn(c):
++    mu = unicorn.Uc(unicorn.UC_ARCH_X86, unicorn.UC_MODE_32)
++    mu.mem_map(0, 0x400000)
++    mu.mem_write(c["addr"], c["code"])
++    mu.mem_write(S, init_bytes(c))
++    mu.reg_write(U.UC_X86_REG_ESP, D.STACK - 4)
++    mu.mem_write(D.STACK - 4, (0x0FFF0).to_bytes(4, "little"))
++    # SSE needs CR4.OSFXSR; unicorn enables it for 32-bit mode
++    try:
++        mu.emu_start(c["addr"], 0x0FFF0, count=10000)
++    except unicorn.UcError:
++        return None
++    return bytes(mu.mem_read(S, 0x200))
++
++
++HARNESS_MAIN = r"""
++int main(void) {
++    uint8_t *m = calloc(1, 0x400000);
++    size_t i;
++    g_xbox_mem_offset = (ptrdiff_t)(uintptr_t)m;
++    for (i = 0; i < sizeof FN / sizeof FN[0]; i++) {
++        pid_t pid;
++        memcpy(m + 0x200000, IN[i], 0x200);
++        g_esp = 0x300000 - 4;
++        fflush(stdout);
++        pid = fork();
++        if (pid == 0) {
++            int k;
++            g_fp_top = 0; g_fp_control_word = 0x027F; g_mxcsr = 0x1F80;
++            FN[i]();
++            printf("%zu ", i);
++            for (k = 0; k < 0x200; k++) printf("%02X", m[0x200000 + k]);
++            printf("\n");
++            fflush(stdout);
++            _exit(0);
++        }
++        waitpid(pid, NULL, 0);
++    }
++    return 0;
++}
++"""
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--cases", type=int, default=40)
++    ap.add_argument("--seed", type=int, default=1)
++    ap.add_argument("--only", default="")
++    ap.add_argument("--show", type=int, default=3)
++    a = ap.parse_args()
++    rng = random.Random(a.seed)
++    ks = keystone.Ks(keystone.KS_ARCH_X86, keystone.KS_MODE_32)
++    cases, db = [], {}
++    image = bytearray(b"\xcc" * 0x100)
++    for g in GENS:
++        if a.only and g not in a.only.split(","): continue
++        for _ in range(a.cases):
++            c = make_case(rng, g)
++            i = len(cases)
++            addr = D.BASE + 0x180 * i
++            try:
++                code, _ = ks.asm(asm_for(c, i), addr)
++            except keystone.KsError as e:
++                print("asm fail:", c["body"], e); continue
++            code = bytes(code)
++            if len(code) > 0x180: continue
++            c["code"], c["addr"] = code, addr
++            if len(image) < addr - D.BASE + 0x180: image.extend(b"\xcc" * (addr - D.BASE + 0x180 - len(image)))
++            image[addr - D.BASE:addr - D.BASE + len(code)] = code
++            db[addr] = {"_addr": addr, "start": hex(addr), "end": addr + len(code), "size": len(code),
++                        "section": ".text", "name": f"t_{i}"}
++            cases.append(c)
++    config._SECTIONS = [config.Section(".text", D.BASE, len(image), 0, len(image), True)]
++    tr = FunctionTranslator(bytes(image), db)
++    unimpl = defaultdict(int)
++    funcs = []
++    for c in cases:
++        t = tr.translate_function(c["addr"], db[c["addr"]])
++        for u in re.findall(r'RECOMP_UNIMPL\("([a-z0-9]+)', t): unimpl[u] += 1
++        funcs.append(t)
++    with tempfile.TemporaryDirectory() as tmp:
++        src = os.path.join(tmp, "h.c")
++        with open(src, "w") as f:
++            f.write(D.HARNESS_TOP.replace('#include <math.h>\n', '#include <math.h>\n#include <unistd.h>\n#include <sys/wait.h>\n'))
++            if "#include <unistd.h>" not in D.HARNESS_TOP:
++                pass
++            f.write("\n".join(funcs))
++            f.write("\nstatic const uint8_t IN[][0x200] = {\n")
++            for c in cases:
++                f.write("{" + ",".join(str(x) for x in init_bytes(c)) + "},\n")
++            f.write("};\ntypedef void (*fn_t)(void);\nstatic fn_t FN[] = {" + ",".join(f"t_{i}" for i in range(len(cases))) + "};\n")
++            f.write(HARNESS_MAIN)
++        exe = os.path.join(tmp, "h")
++        inc = os.path.dirname(os.path.abspath(D.HEADER))
++        r = subprocess.run(["gcc", "-O1", "-w", "-msse2", "-I", inc, src, "-o", exe, "-lm",
++                            "-Wl,--unresolved-symbols=ignore-all"], capture_output=True, text=True)
++        if r.returncode:
++            print(r.stderr[-3000:]); return 2
++        out = subprocess.run([exe], capture_output=True, text=True, timeout=300).stdout
++    got = {}
++    for line in out.splitlines():
++        p = line.split()
++        if len(p) == 2: got[int(p[0])] = bytes.fromhex(p[1])
++    bad = defaultdict(list)
++    for i, c in enumerate(cases):
++        ref = run_unicorn(c)
++        if ref is None: continue
++        g = got.get(i)
++        if g is None:
++            bad[(c["gen"], c["body"].split()[0] if "\n" not in c["body"] else c["body"].split("\n")[1].split()[0], "crash")].append((c, ref, g, ""))
++            continue
++        probs = compare(c, ref, g)
++        if probs:
++            key = (c["gen"], mnem_of(c), probs[0].split(":")[0])
++            bad[key].append((c, ref, g, "; ".join(probs)))
++    n = sum(len(v) for v in bad.values())
++    print(f"{len(cases)} cases, {n} mismatches in {len(bad)} groups")
++    if unimpl: print("unimplemented in lifter:", dict(unimpl))
++    for k, items in sorted(bad.items(), key=lambda kv: -len(kv[1])):
++        print(f"\n== {k[0]} {k[1]} [{k[2]}]: {len(items)}")
++        for c, ref, g, why in items[:a.show]:
++            print("  " + c["body"].replace("\n", "; ") + f" ; {c['jcc']}")
++            print("    " + why)
++    return 0
++
++
++def mnem_of(c):
++    lines = [l for l in c["body"].split("\n") if not l.startswith(("fld ", "fstp ", "fnstcw", "mov ", "or ax", "fldcw"))]
++    return lines[0].split()[0] if lines else c["body"].split()[0]
++
++
++def fdesc(u):
++    return f"{u:08X}({u2f(u):.9g})"
++
++
++def fl_eq(a, b, ulps=0, rel=0.0):
++    if a == b: return True
++    fa, fb = u2f(a), u2f(b)
++    if math.isnan(fa) and math.isnan(fb): return True
++    if rel and math.isfinite(fa) and math.isfinite(fb) and abs(fa - fb) <= rel * max(abs(fa), abs(fb)): return True
++    if ulps and (a ^ b) >> 31 == 0 and abs(a - b) <= ulps: return True
++    return False
++
++
++def compare(c, ref, g):
++    probs = []
++    kind = c["kind"]
++    w = lambda b, o: int.from_bytes(b[o:o + 4], "little")
++    # integer registers
++    for k, r in enumerate(D.REGS):
++        if w(ref, 0x40 + 4 * k) != w(g, 0x40 + 4 * k):
++            probs.append(f"reg:{r} x86={w(ref, 0x40 + 4 * k):08X} C={w(g, 0x40 + 4 * k):08X}")
++    # xmm lanes
++    for k in range(16):
++        a_, b_ = w(ref, 0x180 + 4 * k), w(g, 0x180 + 4 * k)
++        ok = fl_eq(a_, b_, rel=2 ** -11 if kind == "approx" else 0.0) if not c["gen"].startswith("mmx") else a_ == b_
++        if not ok: probs.append(f"xmm{k // 4}[{k % 4}]: x86={fdesc(a_)} C={fdesc(b_)}")
++    for k in range(4):
++        if w(ref, 0x1C0 + 4 * k) != w(g, 0x1C0 + 4 * k):
++            probs.append(f"mm{k // 2}.{k % 2}: x86={w(ref, 0x1C0 + 4 * k):08X} C={w(g, 0x1C0 + 4 * k):08X}")
++    # memory operand written back (movlps/movhps stores)
++    for k in range(4):
++        if w(ref, 0x150 + 4 * k) != w(g, 0x150 + 4 * k):
++            probs.append(f"mem[{k}]: x86={w(ref, 0x150 + 4 * k):08X} C={w(g, 0x150 + 4 * k):08X}")
++    # x87 results
++    for k in range(3):
++        a_, b_ = w(ref, 0x1D0 + 4 * k), w(g, 0x1D0 + 4 * k)
++        if kind == "x87int":
++            ok = a_ == b_
++        elif kind == "x87trig":
++            ok = fl_eq(a_, b_, ulps=4, rel=1e-6)
++        else:
++            ok = fl_eq(a_, b_, ulps=1)
++        if not ok: probs.append(f"x87out[{k}]: x86={fdesc(a_)} C={fdesc(b_)} in={fdesc(c['mem'][0])},{fdesc(c['mem'][1])}")
++    if isinstance(kind, tuple) and ref[0x7C] != g[0x7C]:
++        probs.insert(0, f"flag:{kind[1]} x86={ref[0x7C]} C={g[0x7C]} a={fdesc(c['xmm'][0])}.. mem={fdesc(c['mem'][0])},{fdesc(c['mem'][1])}")
++    return probs
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
+index 25970d2..33bd5c2 100644
+--- a/tools/recomp/lifter.py
++++ b/tools/recomp/lifter.py
+@@ -805,6 +805,24 @@ def _make_condition(jcc, flag_setter, flag_ops):
+         if jcc in ("ja", "jnbe"):
+             return f"(!_cf && {lhs} != 0)", desc
+ 
++    # ── signed conditions after sub/add: SF != OF, at the operand's width ──
++    #
++    # "result < 0" is only right when the operation did not overflow. With
++    # overflow the sign flips: `add esi, 0x80000000` with esi = 0xCD9A68B4
++    # leaves 0x4D9A68B4 (SF 0, OF 1), and jl is taken. Narrow widths overflow
++    # far more often (`add dl, 32` with dl = 0x74). The OF derivation above
++    # covers sub and add whenever the source was snapshotted; use it.
++    if (flag_setter in ("sub", "add") and lhs == "_fa"
++            and jcc in ("jl", "jnge", "jge", "jnl", "jle", "jng", "jg", "jnle")):
++        of = _overflow_flag()
++        if of is not None:
++            sf = f"((({_sf_utype})(_fa)) >> {_sf_top})"
++            less = f"({sf} != ({of} != 0))"
++            zero = f"((({_sf_utype})(_fa)) == 0)"
++            return {"jl": less, "jnge": less, "jge": f"!{less}", "jnl": f"!{less}",
++                    "jle": f"({less} || {zero})", "jng": f"({less} || {zero})",
++                    "jg": f"(!{less} && !{zero})", "jnle": f"(!{less} && !{zero})"}[jcc], desc
++
+     # ── sub: a = a - b, flags from (a_orig - b) ──
+     if flag_setter == "sub":
+         if jcc in ("je", "jz"):
+@@ -1448,7 +1466,23 @@ class Lifter:
+         self.referenced_calls[addr] = name
+         return name
+ 
++    _ESP_LOWERING = frozenset({"sub", "add", "and", "mov", "lea", "xchg"})
++
+     def lift_instruction(self, insn):
++        """Stack hygiene wrapper: an instruction that writes esp explicitly
++        (sub esp, N / add esp, -N / and esp, -A / mov esp, r / lea esp, [..] /
++        xchg with esp) is bracketed by RECOMP_ESP_MARK/RECOMP_ESP_LOWER, which
++        zero the newly allocated bytes when g_recomp_stack_zero is set
++        (recomp_types.h). push/pop/call/ret write what they allocate."""
++        out = self._lift_instruction_inner(insn)
++        ops = insn.operands
++        if (insn.mnemonic in self._ESP_LOWERING and ops
++                and any(o.type == "reg" and o.reg == "esp"
++                        for o in (ops if insn.mnemonic == "xchg" else ops[:1]))):
++            return ["RECOMP_ESP_MARK();"] + list(out) + ["RECOMP_ESP_LOWER();"]
++        return out
++
++    def _lift_instruction_inner(self, insn):
+         """
+         Translate a single x86 instruction to one or more C statements.
+         Returns a list of C statement strings.
+@@ -2211,11 +2245,52 @@ class Lifter:
+     def _lift_shrd(self, insn, ops):
+         return self._lift_double_shift(insn, ops, "shrd")
+ 
++    @staticmethod
++    def _narrow_muldiv(m, src, w):
++        """One-operand mul/imul/div/idiv on an 8- or 16-bit operand.
++
++        The narrow forms use AX (8-bit: AX = AL * r/m8, AL/AH = AX / r/m8) or
++        DX:AX (16-bit) and leave the rest of EAX and all of EDX's upper half
++        alone; the 8-bit forms never touch EDX at all. Lifting them as the
++        32-bit form wrote the high half of a 32x32 product into EDX, wiping
++        whatever the caller kept there (Predator: Concrete Jungle,
++        EXGeoEntity::Draw keeps the render flags in EDX across "imul byte ptr
++        [mode]", and losing them dropped the HUD tint).
++        """
++        if w == 1:
++            if m == "mul":
++                return [f"SET_LO16(eax, (uint32_t)LO8(eax) * (uint32_t)(uint8_t)({src}));"]
++            if m == "imul":
++                return [f"SET_LO16(eax, (uint32_t)((int32_t)(int8_t)LO8(eax) * (int32_t)(int8_t)({src})));"]
++            if m == "div":
++                return [f"{{ uint32_t _d = (uint8_t)({src}), _n = LO16(eax);",
++                        f"  SET_LO8(eax, _n / _d); SET_HI8(eax, _n % _d); }}"]
++            if m == "idiv":
++                return [f"{{ int32_t _d = (int8_t)({src}), _n = (int16_t)LO16(eax);",
++                        f"  SET_LO8(eax, (uint32_t)(_n / _d)); SET_HI8(eax, (uint32_t)(_n % _d)); }}"]
++        if w == 2:
++            if m == "mul":
++                return [f"{{ uint32_t _r = (uint32_t)LO16(eax) * (uint32_t)(uint16_t)({src});",
++                        f"  SET_LO16(eax, _r); SET_LO16(edx, _r >> 16); }}"]
++            if m == "imul":
++                return [f"{{ uint32_t _r = (uint32_t)((int32_t)(int16_t)LO16(eax) * (int32_t)(int16_t)({src}));",
++                        f"  SET_LO16(eax, _r); SET_LO16(edx, _r >> 16); }}"]
++            if m == "div":
++                return [f"{{ uint32_t _d = (uint16_t)({src}), _n = ((uint32_t)LO16(edx) << 16) | LO16(eax);",
++                        f"  SET_LO16(eax, _n / _d); SET_LO16(edx, _n % _d); }}"]
++            if m == "idiv":
++                return [f"{{ int32_t _d = (int16_t)({src}), _n = (int32_t)(((uint32_t)LO16(edx) << 16) | LO16(eax));",
++                        f"  SET_LO16(eax, (uint32_t)(_n / _d)); SET_LO16(edx, (uint32_t)(_n % _d)); }}"]
++        return None
++
+     def _lift_imul(self, insn, ops):
+         nops = len(ops)
+         if nops == 1:
+-            # One operand: edx:eax = eax * ops[0]
++            # One operand: edx:eax = eax * ops[0] (AX / DX:AX for narrow operands)
+             src = _fmt_operand_read(ops[0])
++            narrow = self._narrow_muldiv("imul", src, _operand_width(ops[0]) or 4)
++            if narrow:
++                return narrow
+             return [
+                 f"{{ int64_t _r = (int64_t)(int32_t)eax * (int64_t)(int32_t){src};",
+                 f"  eax = (uint32_t)_r; edx = (uint32_t)(_r >> 32); }}"
+@@ -2236,6 +2311,9 @@ class Lifter:
+         if len(ops) < 1:
+             return [f"/* {m}: no operand */"]
+         src = _fmt_operand_read(ops[0])
++        narrow = self._narrow_muldiv(m, src, _operand_width(ops[0]) or 4)
++        if narrow:
++            return narrow
+         if m == "mul":
+             return [
+                 f"{{ uint64_t _r = (uint64_t)eax * (uint64_t){src};",
+@@ -2663,7 +2741,7 @@ class Lifter:
+         """Check if a jump target is outside the current function."""
+         return not (self.func_start <= addr < self.func_end)
+ 
+-    def _read_jump_table(self, table_va, max_entries=256):
++    def _read_jump_table(self, table_va, max_entries=1024):
+         """Read 32-bit jump table entries from the XBE at a given VA.
+         Returns list of target addresses. Stops when an entry is not a
+         valid code address or max_entries is reached."""
+@@ -2757,7 +2835,7 @@ class Lifter:
+             inside.append(target)
+         return inside
+ 
+-    def _read_jump_table_backward(self, last_va, max_entries=256):
++    def _read_jump_table_backward(self, last_va, max_entries=1024):
+         """Like _read_jump_table, reading downward from last_va."""
+         targets = []
+         for i in range(max_entries):
