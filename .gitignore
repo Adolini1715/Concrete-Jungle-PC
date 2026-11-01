@@ -37,3 +37,9 @@ game-files/
 pcj-decomp/
 dist/PCJ-PC/
 game/default_analysis.json
+_build/
+installer/python/
+install-log.txt
+/Predator Concrete Jungle PC/
+/PUT YOUR GAME HERE/*
+!/PUT YOUR GAME HERE/README.txt

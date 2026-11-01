@@ -41,4 +41,7 @@ if __name__ == '__main__':
             o = os.path.join(dest, p.lstrip('/')); os.makedirs(os.path.dirname(o), exist_ok=True)
             f.seek(base + s*2048); left = sz
             with open(o, 'wb') as w:
-                while left: b = f.read(min(left, 1<<24)); w.write(b); left -= len(b)
+                while left:
+                    b = f.read(min(left, 1<<24))
+                    if not b: raise SystemExit(f'{img} ends inside {p}: the disc image is incomplete')
+                    w.write(b); left -= len(b)

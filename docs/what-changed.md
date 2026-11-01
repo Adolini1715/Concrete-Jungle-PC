@@ -14,7 +14,7 @@ what ships in this repository. Experiments that were tried and dropped are noted
 - **138 functions** run as native code compiled from that decompiled C++, in place of their
   machine-translated versions. **18** of those are deliberately modified (movement, camera,
   menus) in `mods/`.
-- **6 bugs fixed in the recompiler toolkit and runtime**, and **4 in the original game itself**.
+- **7 bugs fixed in the recompiler toolkit and runtime**, and **4 in the original game itself**.
 
 The whole project was built with AI assistance (Claude), directed and play-tested by one person.
 It is a first release. More eyes on it are welcome, and so are bug reports.
@@ -51,6 +51,9 @@ No game code or data is in this repository. You build the port from your own dis
   work without flicker or brightness jumps, and the game pauses while you are away.
 - F12 screenshots, saved next to the game.
 - Controller rumble, and an analog stick dead zone that no longer snaps to the four directions.
+- A Windows installer: put your disc image or extracted disc in a folder and double-click
+  `Install.bat`. It fetches pinned build tools into that folder (no WSL, no administrator
+  rights), builds the game from your copy, and leaves it ready with a desktop shortcut.
 - A first-run folder picker for your game files; settings saved to `pcj.ini`.
 
 ### Controls and movement
@@ -141,6 +144,11 @@ back. The toolkit fixes ship as `patches/xboxrecomp-v0.15.0-pcj.patch`.
 - **Distorted, clipping audio**, because the audio processor read its sample buffers from the
   wrong place.
 - **A wrong C runtime result** (`fmod(0, x)`) that the game depends on, fixed in the port's runtime.
+- **A 36-minute disassembly.** Capstone's Python `disasm()` decodes its whole buffer before it
+  hands back the first instruction, and the function finder probed thousands of gaps by passing
+  it the rest of the section each time. Feeding it small windows and caching decoded addresses
+  gives byte-identical output in 3.5 minutes, so a whole build now takes about 10 minutes on a
+  2-core machine instead of 30 to 60.
 
 ## The work behind it
 

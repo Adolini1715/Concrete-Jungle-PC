@@ -54,7 +54,7 @@ class Tour:
         if self.wine:
             env['PCJ_RUN'] = os.path.join(ROOT, 'tools', 'run_wine.sh')
             stage = os.path.join(ROOT, 'dist', 'stage', 'pcj.exe')
-            shutil.copy(os.path.join(ROOT, 'build-win', 'pcj.exe'), stage)
+            shutil.copy(os.environ.get('TOUR_EXE') or os.path.join(ROOT, 'build-win', 'pcj.exe'), stage)   # TOUR_EXE: another build
         env.update(extra_env or {})
         cmd = [sys.executable, os.path.join(ROOT, 'tools', 'route.py'), self.rtag, '--until', until,
                '--after', '100000000', '--dump-every', '100000000'] + list(args)
@@ -265,17 +265,22 @@ class Tour:
         st.step('main menu', lambda: None, lambda: True if (st.fe() or ('',))[0] == 'Main' else 'fe=%s' % (st.fe(),))
         # Options: Up twice from New Game (Quit Game is last), then A
         def open_options():
-            # Main: New Game, Load Game, Options, Quit Game. One press at a time, and check where A landed.
+            # Main: New Game, Load Game, Options, Quit Game, and the cursor wraps around: Quit Game
+            # is one Up from New Game. So only ever press Down from a known item (a dropped press
+            # lands on Load Game, harmless), and never Up. One press at a time; check where A landed.
+            downs = 2                                       # the cursor starts on New Game
             for attempt in range(5):
                 f = (st.fe() or ('',))[0]
                 if f.startswith('Options'):
                     return 'attempt %d' % attempt
                 if f != 'Main':
+                    downs = 1 if f == 'Load_Game' else 2       # B leaves the cursor on the item it opened
                     st.pad('b', wait=2.5)
                     continue
-                for k in ('up', 'up', 'up', 'up', 'down', 'down'):   # to the top (it stops there), then two down
-                    st.pad(k, wait=0.9)
+                for k in ['down'] * downs:
+                    st.pad(k, wait=1.2)
                 st.pad('a', wait=3)
+                downs = 0 if (st.fe() or ('',))[0] == 'Main' else downs   # nothing opened: try A again
             return 'fe=%s' % (st.fe(),)
         st.step('open Options', open_options,
                 lambda: True if (st.fe() or ('',))[0].startswith('Options') else 'fe=%s' % (st.fe(),))

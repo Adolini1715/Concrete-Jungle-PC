@@ -50,11 +50,11 @@ repo. You build it from your own copy of the game.
 
 ## Building
 
-Needs the USA retail disc (extracted or .iso) and Ubuntu or WSL2 on Windows:
-
-    ./build.sh /mnt/c/path/to/game
-
-First build takes 30 to 60 minutes. Copy `dist/PCJ-PC` to Windows and run `pcj.exe`.
+Needs the USA retail disc, as an .iso or extracted. On Windows: unzip the release, put your
+disc image or extracted disc in `PUT YOUR GAME HERE`, and double-click `Install.bat`. It
+downloads the build tools into that folder, builds the game from your copy (about 10 to 30
+minutes), and puts a shortcut on your desktop. No WSL, no administrator rights. Linux:
+`./build.sh /path/to/game`.
 
 ## Known issues
 

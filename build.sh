@@ -10,7 +10,7 @@
 # Linux with --linux). Nothing from the game is downloaded or included: the recompiler reads
 # your default.xbe, and the game reads your disc files at run time.
 #
-# Takes 30-60 minutes the first time (the disassembly pass alone is ~20). Re-runs reuse work/.
+# Takes 10-20 minutes the first time. Re-runs reuse work/.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$PWD
@@ -123,7 +123,7 @@ fi
 
 # ---- 5. recompile ---------------------------------------------------------------------------
 if [ ! -f work/.done ]; then
-  say "Recompiling default.xbe (30-60 minutes the first time)"
+  say "Recompiling default.xbe (5-15 minutes the first time)"
   mkdir -p build work
   sh tools/regen_all.sh
   touch work/.done

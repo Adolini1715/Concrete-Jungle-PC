@@ -35,8 +35,16 @@ else()
   set(PCJ_DECOMP_DEFAULT "/home/claude/pcj-decomp")
 endif()
 set(PCJ_DECOMP_DIR "${PCJ_DECOMP_DEFAULT}" CACHE PATH "pcj-decomp checkout (read only)")
+# CJ_HYBRID_PREGEN: a folder already holding the hybridize output (pregen/hybrid,
+# tools/pregen_hybrid.sh), so a build needs neither clang nor libclang.
+set(CJ_HYBRID_PREGEN "" CACHE PATH "pregenerated hybridize output (empty: generate)")
+set(CJ_PYTHON "python3" CACHE STRING "Python used by the build steps")
 if(CJ_HYBRID_GEN)
-  set(HY_DIR ${CMAKE_BINARY_DIR}/hybrid)
+  if(CJ_HYBRID_PREGEN)
+    set(HY_DIR ${CJ_HYBRID_PREGEN})
+  else()
+    set(HY_DIR ${CMAKE_BINARY_DIR}/hybrid)
+  endif()
   # the group list is read at configure time: re-configure when it changes (a stale list drops swaps and the link fails)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CJ_TARGETS})
   file(STRINGS ${CJ_TARGETS} HY_LINES REGEX "^[^#]")
@@ -63,10 +71,12 @@ if(CJ_HYBRID_GEN)
     endforeach()
   endforeach()
   file(GLOB HY_HDRS ${PCJ_DECOMP_DIR}/include/*.h)
-  add_custom_command(OUTPUT ${HY_OUT}
-    COMMAND ${CMAKE_COMMAND} -E env PCJ_DECOMP=${PCJ_DECOMP_DIR} python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/hybridize/hybridize.py gen ${HY_SPEC} -o ${HY_DIR}
-    DEPENDS tools/hybridize/hybridize.py ${CJ_TARGETS} ${HY_DEPS} ${HY_HDRS}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} COMMENT "hybridize: guest-form C++ from pcj-decomp")
+  if(NOT CJ_HYBRID_PREGEN)
+    add_custom_command(OUTPUT ${HY_OUT}
+      COMMAND ${CMAKE_COMMAND} -E env PCJ_DECOMP=${PCJ_DECOMP_DIR} ${CJ_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tools/hybridize/hybridize.py gen ${HY_SPEC} -o ${HY_DIR}
+      DEPENDS tools/hybridize/hybridize.py ${CJ_TARGETS} ${HY_DEPS} ${HY_HDRS}
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} COMMENT "hybridize: guest-form C++ from pcj-decomp")
+  endif()
   set(SWAP_SOURCES ${HY_OUT} src/native/hybrid/guest_rt.c src/native/hybrid/cjmod.c src/native/hybrid/cjmod_cam.c src/native/hybrid/cjmod_move.c src/native/hybrid/swap_verify.c)
 else()
   set(SWAP_SOURCES src/native/native_swap.c src/native/fe_script_native.cpp)
