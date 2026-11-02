@@ -251,6 +251,8 @@ each run. That found what no test machine had:
   slightly larger and nearer the camera. On a 2005 TV it blurred into a halo; at high resolution
   it reads as a sharp double image. This is the original game's look; an option to soften it may
   come later.
+- In puddle reflections the back of a car can show as plain white. Reported in play and not yet
+  looked into, so it is not yet known whether the original game does the same.
 - A quick save only loads into the build of `pcj.exe` that made it: after updating, start the
   chapter and save again.
 - HD textures so far cover Scarface, his weapons, and the Jungle Hunter and City Hunter costumes.
