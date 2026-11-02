@@ -5,7 +5,7 @@ as a native Windows (and Linux) program, built by static recompilation: every fu
 Xbox executable is translated to C and compiled for x86-64. No emulator, no game files in the
 repo. You build it from your own copy of the game.
 
-**Repo:** <link>  **HD texture packs:** <link>
+**Repo:** https://github.com/Adolini1715/Concrete-Jungle-PC (release v0.1)  **HD texture packs:** <link>
 
 ## Features
 
