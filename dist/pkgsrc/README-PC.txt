@@ -38,6 +38,7 @@ DEFAULT CONTROLS (keyboard and mouse)
 KEYS
   F5 / F8        quick save / quick load
   F3             texture packs on / off (compare with the original)
+  F7             frame rate 30 / 60 (also Options > PC Settings)
   F11, Alt+Enter fullscreen
   F10            free the mouse cursor (mouse look)
   F12            screenshot (saved in the screenshots folder)

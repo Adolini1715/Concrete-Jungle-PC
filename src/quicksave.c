@@ -402,12 +402,26 @@ static const char *qs_dir(void)
     return s_dir;
 }
 
+extern recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
 static uint64_t build_key(const QsState *st)
 {
     uint64_t h = 1469598103934665603ull;
     int i;
     const char *k = "pcj-qs-1";
     for (; *k; k++) h = (h ^ (uint8_t)*k) * 1099511628211ull;
+    {   /* The code layout: the file holds worker-thread stacks and host data with return
+         * addresses and function pointers, which another build of pcj.exe places elsewhere
+         * (a save from an older exe loaded into a newer one crashed minutes later, when a
+         * restored thread returned). Distances between functions in different objects,
+         * including the generated code, change with almost any rebuild. */
+        extern int pcs_get(int id);
+        uintptr_t base = (uintptr_t)&build_key;
+        uintptr_t fn[] = {(uintptr_t)&pcs_get, (uintptr_t)&recomp_lookup, (uintptr_t)recomp_lookup(0x0016B130u),
+                          (uintptr_t)recomp_lookup(0x0010E2F0u), (uintptr_t)recomp_lookup(0x00011000u),
+                          (uintptr_t)&recomp_lookup_manual};
+        for (i = 0; i < (int)(sizeof fn / sizeof fn[0]); i++)
+            h = (h ^ (uint64_t)(fn[i] - base)) * 1099511628211ull;
+    }
     for (i = 0; i < st->nreg; i++) {
         const char *n = st->reg[i].name;
         for (; *n; n++) h = (h ^ (uint8_t)*n) * 1099511628211ull;

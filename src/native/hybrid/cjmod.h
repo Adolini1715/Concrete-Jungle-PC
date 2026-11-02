@@ -39,6 +39,7 @@ float cjmod_jump_scale(void);
 float cjmod_run_accel(void);
 float cjmod_run_stop(void);
 float cjmod_turn_rate(void);
+void cjmod_grab_log(int what, int flags, float a, float b, float mul, float probe_y);   /* CJ_GRAB_LOG=1 */
 int cjmod_snappy_stop(void);
 unsigned int cjmod_anim_test(void);
 /* Modern movement (docs/movement-design.md). */

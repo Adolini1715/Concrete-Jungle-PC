@@ -3092,7 +3092,7 @@ static void N_XItemHandler_Player__DoHit_00167fa0(gv::XItemHandler_Player *self)
 static void N_EXVector__EXVector_00011900(gv::EXVector *self, const gv::EXVector & v)
 { cjg::call_this<void>(cjg::Site(0x00011330u, 0u, 0u, 4), cjg::up<gv::EXMaths::vec_xyzw>(self, 0), cjg::ref((*cjg::up<gv::EXMaths::vec_xyzw>(&(v), 0)))); }
 
-// XItemHandler_Player::MoveJump  VA 00150960  mods-preprocessed/Player.cpp:19255 (preprocessed)
+// XItemHandler_Player::MoveJump  VA 00150960  mods-preprocessed/Player.cpp:19256 (preprocessed)
 static void N_XItemHandler_Player__MoveJump_00150960(gv::XItemHandler_Player *self)
 {
     cjg::Frame F(0x94, 4, cjg::Frame::Area{});
@@ -3222,7 +3222,7 @@ static void N_XItemHandler_Player__MoveJump_00150960(gv::XItemHandler_Player *se
 static void N_EXVector__EXVector_000118d0(gv::EXVector *self, float x_, float y_, float z_, float w_)
 { self->x = x_; self->y = y_; self->z = z_; self->w = w_; }
 
-// XItemHandler_Player::DoJump  VA 0016b130  mods-preprocessed/Player.cpp:19521 (preprocessed)
+// XItemHandler_Player::DoJump  VA 0016b130  mods-preprocessed/Player.cpp:19522 (preprocessed)
 static void N_XItemHandler_Player__DoJump_0016b130(gv::XItemHandler_Player *self)
 {
     cjg::Frame F(0x124, 4, cjg::Frame::Area{});
@@ -3312,20 +3312,29 @@ static void N_XItemHandler_Player__DoJump_0016b130(gv::XItemHandler_Player *self
             else result = 1;
         }
         if (ok && 0.0f > (*cjg::up<gv::EXMaths::vec_xyzw>(&(pPhys->m_DeltaMove), 0)).y) {
-            float r = mul * 2.5f;
+            float r = (mul > 2.0f ? mul : 2.0f) * 2.5f;
             result = -1;
             cjg::call_this<void>(cjg::Site(0x00269610u, 0x0016b6ceu, 0x138u, 12), &(g), cjg::ref(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), (float)(r), (EXGrabPointTemp::GRABFITYPE)2);
             cjg::call_this<void>(cjg::Site(0x002002b0u, 0x0016b6ddu, 0x138u, 4), &((*cjg::up<gv::EXItemEnv>(&((*cjg::g<gv::XItemEnv>(0x0048e8c8u))), 0))), cjg::ref(g));
-            if (cjg::call_this<int8_t>(cjg::Site(0x001520c0u, 0x0016b6e9u, 0x138u, 4), self, cjg::ref(g))) {
+            float pw = (mul > 2.0f ? mul : 2.0f) * 0.3f;
+            const EXVector &pp0 = cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0));
+            float pdx = (*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).x - (*cjg::up<gv::EXMaths::vec_xyzw>(&(pp0), 0)).x, pdz = (*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).z - (*cjg::up<gv::EXMaths::vec_xyzw>(&(pp0), 0)).z;
+            if (g.m_24 == 2 && (g.m_28 & 0x100) && !(cjg::call_cdecl<float>(cjg::Site(0x000110c0u, 0u, 0u, 0), (float)(pdx * pdx + pdz * pdz)) > 0.5f) &&
+                !((float)fabs((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).y - (*cjg::up<gv::EXMaths::vec_xyzw>(&(pp0), 0)).y) > pw)) {
                 result = 5;
             } else {
                 cjg::call_this<void>(cjg::Site(0x00269610u, 0x0016b70bu, 0x138u, 12), &(g), cjg::ref(probe), (float)(r), (EXGrabPointTemp::GRABFITYPE)1);
                 cjg::call_this<void>(cjg::Site(0x002002b0u, 0x0016b71au, 0x138u, 4), &((*cjg::up<gv::EXItemEnv>(&((*cjg::g<gv::XItemEnv>(0x0048e8c8u))), 0))), cjg::ref(g));
                 unsigned int flags = g.m_28;
+                if (g.m_24 == 1)
+                    ::cjmod_grab_log(0, (int)flags, (*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).y - (*cjg::up<gv::EXMaths::vec_xyzw>(&(probe), 0)).y, cjg::call_cdecl<float>(cjg::Site(0x000110c0u, 0u, 0u, 0), (float)(((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).x - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0)).x) * ((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).x - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0)).x) +
+                                   ((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).z - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0)).z) * ((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).z - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0)).z))), mul, (*cjg::up<gv::EXMaths::vec_xyzw>(&(probe), 0)).y);
                 if (g.m_24 == 1 && !(flags & 0x20)) {
-                    if (cjg::call_this<int8_t>(cjg::Site(0x00151f80u, 0x0016b73eu, 0x138u, 4), self, cjg::ref(g))) {
+                    float qdx = (*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).x - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0)).x, qdz = (*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).z - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0)).z;
+                    if ((flags & 0x100) && !(cjg::call_cdecl<float>(cjg::Site(0x000110c0u, 0u, 0u, 0), (float)(qdx * qdx + qdz * qdz)) > 0.5f) &&
+                        !((float)fabs((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).y - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0)).y) > pw)) {
                         result = 5;
-                    } else if (!((float)fabs((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).y - (*cjg::up<gv::EXMaths::vec_xyzw>(&(probe), 0)).y) > mul * 0.5f)) {
+                    } else if (!((float)fabs((*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).y - (*cjg::up<gv::EXMaths::vec_xyzw>(&(probe), 0)).y) > (mul > 2.0f ? mul : 2.0f) * 0.5f)) {
                         EXPlacementItem *pI = cjg::up<gv::EXPlacementItem>(self->m_pItem, 0);
                         float hx = (*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).x - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), pI)), 0)).x, hz = (*cjg::up<gv::EXMaths::vec_xyzw>(&(g.m_30), 0)).z - (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c40u, 0u, 0u, 0), pI)), 0)).z;
                         if (!(cjg::call_cdecl<float>(cjg::Site(0x000110c0u, 0u, 0u, 0), (float)(hx * hx + hz * hz)) > 1.5f)) {
@@ -3343,7 +3352,10 @@ static void N_XItemHandler_Player__DoJump_0016b130(gv::XItemHandler_Player *self
                                 if (flags & 8) { if (e > 1.3744468f) fail = 1; }
                                 else if (e > 1.1780972f) fail = 1;
                             }
-                            if (!fail && cjg::call_this<int8_t>(cjg::Site(0x00161350u, 0x0016ba00u, 0x128u, 8), self, cjg::ref(g), cjg::ref(a)) && cjg::call_this<int8_t>(cjg::Site(0x0014b500u, 0x0016ba23u, 0x128u, 16), self, cjg::ref(g.m_30), (float)(a), (int8_t)(0), cjg::ref(a))) {
+                            if (fail) ::cjmod_grab_log(1, (int)flags, cjg::call_cdecl<float>(cjg::Site(0x0014a050u, 0u, 0u, 0), (float)((*cjg::up<gv::EXMaths::vec_xyzw>(&(rot), 0)).y), (float)(a)), 0.0f, mul, (*cjg::up<gv::EXMaths::vec_xyzw>(&(probe), 0)).y);
+                            else if (!cjg::call_this<int8_t>(cjg::Site(0x00161350u, 0x0016ba00u, 0x128u, 8), self, cjg::ref(g), cjg::ref(a))) ::cjmod_grab_log(2, (int)flags, 0.0f, 0.0f, mul, (*cjg::up<gv::EXMaths::vec_xyzw>(&(probe), 0)).y);
+                            else if (!cjg::call_this<int8_t>(cjg::Site(0x0014b500u, 0x0016ba23u, 0x128u, 16), self, cjg::ref(g.m_30), (float)(a), (int8_t)(0), cjg::ref(a))) ::cjmod_grab_log(3, (int)flags, 0.0f, 0.0f, mul, (*cjg::up<gv::EXMaths::vec_xyzw>(&(probe), 0)).y);
+                            if (!fail && cjg::call_this<int8_t>(cjg::Site(0x00161350u, 0u, 0u, 8), self, cjg::ref(g), cjg::ref(a)) && cjg::call_this<int8_t>(cjg::Site(0x0014b500u, 0u, 0u, 16), self, cjg::ref(g.m_30), (float)(a), (int8_t)(0), cjg::ref(a))) {
                                 float yaw = a;
                                 if (flip != 0.0f) yaw += 3.1415927f;
                                 cjg::call_this<gv::EXVector &>(cjg::Site(0x00011990u, 0u, 0u, 4), &(pI->m_rotation), cjg::ref((*([&]() -> gv::EXVector * { gv::EXVector *__t = F.at<gv::EXVector>(0x114); N_EXVector__EXVector_000118d0(__t, (*cjg::up<gv::EXMaths::vec_xyzw>(&(rot), 0)).x, yaw, (*cjg::up<gv::EXMaths::vec_xyzw>(&(rot), 0)).z, (*cjg::up<gv::EXMaths::vec_xyzw>(&(rot), 0)).w); return __t; }()))));
@@ -3423,7 +3435,7 @@ static void N_XItemHandler_Player__DoJump_0016b130(gv::XItemHandler_Player *self
 }
 }
 
-// XItemHandler_Player::MoveNormal  VA 00165450  mods-preprocessed/Player.cpp:20176 (preprocessed)
+// XItemHandler_Player::MoveNormal  VA 00165450  mods-preprocessed/Player.cpp:20189 (preprocessed)
 static int8_t N_XItemHandler_Player__MoveNormal_00165450(gv::XItemHandler_Player *self, int32_t flags)
 {
     cjg::Frame F(0x80, 4, cjg::Frame::Area{});
@@ -3506,7 +3518,7 @@ static int8_t N_XItemHandler_Player__MoveNormal_00165450(gv::XItemHandler_Player
 }
 }
 
-// XItemHandler_Player::CheckForLand  VA 0016a400  mods-preprocessed/Player.cpp:20506 (preprocessed)
+// XItemHandler_Player::CheckForLand  VA 0016a400  mods-preprocessed/Player.cpp:20519 (preprocessed)
 static void N_XItemHandler_Player__CheckForLand_0016a400(gv::XItemHandler_Player *self)
 {
     cjg::Frame F(0x40, 4, cjg::Frame::Area{});
@@ -3596,7 +3608,7 @@ landed:
 static void N_EXQuaternion__EXQuaternion_000124a0(gv::EXQuaternion *self, float x_, float y_, float z_, float w_)
 { self->x = x_; self->y = y_; self->z = z_; self->w = w_; }
 
-// XItemHandler_Player::CheckForStop  VA 00160760  mods-preprocessed/Player.cpp:21545 (preprocessed)
+// XItemHandler_Player::CheckForStop  VA 00160760  mods-preprocessed/Player.cpp:21558 (preprocessed)
 static int8_t N_XItemHandler_Player__CheckForStop_00160760(gv::XItemHandler_Player *self, int32_t hold)
 {
     cjg::Frame F(0x10, 4, cjg::Frame::Area{});
@@ -3631,7 +3643,7 @@ static int8_t N_XItemHandler_Player__CheckForStop_00160760(gv::XItemHandler_Play
 }
 }
 
-// XItemHandler_Player::DoIdle  VA 00168600  mods-preprocessed/Player.cpp:23538 (preprocessed)
+// XItemHandler_Player::DoIdle  VA 00168600  mods-preprocessed/Player.cpp:23551 (preprocessed)
 static void N_XItemHandler_Player__DoIdle_00168600(gv::XItemHandler_Player *self)
 {
     if ((*cjg::g<uint32_t>(0x0048e874u)) == cjg::call_cdecl<uint32_t>(cjg::Site(0x000afaa0u, 0x00168608u, 0x4u, 0))) return;
@@ -3744,7 +3756,7 @@ static gv::EXVector N_EXVector__operator__inldeab(gv::EXVector *self, const gv::
 { return (*([&]() -> gv::EXVector * { gv::EXVector *__t = F.at<gv::EXVector>(0x0); N_EXVector__EXVector_00011930(__t, cjg::call_this_sret(F.at<gv::EXMaths::vec_xyzw>(0x10), cjg::Site(0x000113f0u, 0u, 0u, 8), cjg::up<gv::EXMaths::vec_xyzw>(self, 0), cjg::ref((*cjg::up<gv::EXMaths::vec_xyzw>(&(v), 0))))); return __t; }())); }
 }
 
-// XItemHandler_Player::MoveStrafe  VA 001659e0  mods-preprocessed/Player.cpp:20254 (preprocessed)
+// XItemHandler_Player::MoveStrafe  VA 001659e0  mods-preprocessed/Player.cpp:20267 (preprocessed)
 static void N_XItemHandler_Player__MoveStrafe_001659e0(gv::XItemHandler_Player *self)
 {
     cjg::Frame F(0xac, 4, cjg::Frame::Area{});
@@ -4001,7 +4013,7 @@ jumpcheck:
 }
 }
 
-// XItemHandler_Player::CheckForJump  VA 0015faa0  mods-preprocessed/Player.cpp:20993 (preprocessed)
+// XItemHandler_Player::CheckForJump  VA 0015faa0  mods-preprocessed/Player.cpp:21006 (preprocessed)
 static int8_t N_XItemHandler_Player__CheckForJump_0015faa0(gv::XItemHandler_Player *self, int8_t b)
 {
     if (b && ::cjmod_move_modern() && ::cjmod_run_charging()) {
@@ -4047,7 +4059,7 @@ static int8_t N_XItemHandler_Player__CheckForJump_0015faa0(gv::XItemHandler_Play
 static void N_EXQuaternion__EXQuaternion_00012470(gv::EXQuaternion *self, const gv::EXMaths::vec_xyzw & v)
 { cjg::call_this<void>(cjg::Site(0x00011330u, 0u, 0u, 4), cjg::up<gv::EXMaths::vec_xyzw>(self, 0), cjg::ref(v)); }
 
-// XItemHandler_Player::DoCrouch  VA 001689c0  mods-preprocessed/Player.cpp:23807 (preprocessed)
+// XItemHandler_Player::DoCrouch  VA 001689c0  mods-preprocessed/Player.cpp:23820 (preprocessed)
 static void N_XItemHandler_Player__DoCrouch_001689c0(gv::XItemHandler_Player *self)
 {
     cjg::Frame F(0x4c, 4, cjg::Frame::Area{});
@@ -4123,7 +4135,7 @@ static void N_XItemHandler_Player__DoCrouch_001689c0(gv::XItemHandler_Player *se
 }
 }
 
-// XItemHandler_Player::DoHit  VA 00167fa0  mods-preprocessed/Player.cpp:24224 (preprocessed)
+// XItemHandler_Player::DoHit  VA 00167fa0  mods-preprocessed/Player.cpp:24237 (preprocessed)
 static void N_XItemHandler_Player__DoHit_00167fa0(gv::XItemHandler_Player *self)
 {
     cjg::Frame F(0x8, 4, cjg::Frame::Area{});

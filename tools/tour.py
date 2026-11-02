@@ -50,7 +50,8 @@ class Tour:
         self.rd = os.path.join(ROOT, 'run', self.rtag)
         shutil.rmtree(self.rd, ignore_errors=True)
         env = dict(os.environ, CJ_GL_SKIP='1', CJ_MENU_MOUSE_LOG='1', ROUTE_NO_REPEAT='1', ROUTE_BOOT_START='1',
-                   CJ_PAD_HOST='1')   # the host keyboard and mouse reach the game as in play
+                   CJ_PAD_HOST='1',   # the host keyboard and mouse reach the game as in play
+                   CJ_WIDESCREEN=os.environ.get('TOUR_WIDESCREEN', '0'))   # mouse() maps 640x480 menu units onto a 4:3 picture
         if self.wine:
             env['PCJ_RUN'] = os.path.join(ROOT, 'tools', 'run_wine.sh')
             stage = os.path.join(ROOT, 'dist', 'stage', 'pcj.exe')
@@ -142,6 +143,10 @@ class Tour:
         if not w:
             return None
         _, x, y, ww, hh = w
+        if os.environ.get('TOUR_WIDESCREEN', '0') == '1':   # the 640x480 menus stretched over a 16:9 picture
+            vw, vh = (ww, ww * 9 / 16) if ww * 9 <= hh * 16 else (hh * 16 / 9, hh)
+            ox, oy = x + (ww - vw) / 2, y + (hh - vh) / 2
+            return int(ox + fx * vw / 640.0), int(oy + fy * vh / 480.0)
         s = min(ww / 640.0, hh / 480.0)
         ox, oy = x + (ww - 640 * s) / 2, y + (hh - 480 * s) / 2
         return int(ox + fx * s), int(oy + fy * s)
@@ -311,6 +316,8 @@ class Tour:
         st.step('after the toggles: still drawing', lambda: None)
         # mouse: hover and click the footer's Back prompt area, then a PC Settings row
         st.step('mouse: hover rows', lambda: [st.mouse(200, 190 + 26 * i, wait=0.4) for i in range(6)] and None)
+        # keyboard prompts in the footer (keycaps are wider than the pad icons): check none is cut off
+        st.step('keyboard: footer prompts', lambda: (st.key('Down', wait=1.2), st.mouse(363, 242, wait=2.0)) and None)
         st.step('keyboard: Esc back to Options', lambda: st.key('Escape', wait=3),
                 lambda: True if (st.fe() or ('',))[0] == 'Options' else 'fe=%s' % (st.fe(),))
         st.step('keyboard: Esc back to the main menu', lambda: st.key('Escape', wait=3),

@@ -32,7 +32,7 @@ typedef struct {
  * page shows 9 rows and scrolls; a spinner or slider draws itself even when
  * scrolled out of view, so those rows sit at 4-8, which every scroll position shows. */
 static const PcSet s_set[] = {
-    {"CJ_WIDESCREEN", "Widescreen", "The game's own 16:9 mode with a 16:9 window.", PCS_CHECK, 0, 1, 1, 0},
+    {"CJ_WIDESCREEN", "Widescreen", "The game's own 16:9 mode with a 16:9 window.", PCS_CHECK, 0, 1, 1, 1},
     {"CJ_FULLSCREEN", "Fullscreen", "Desktop fullscreen. F11 or Alt+Enter also toggle it.", PCS_CHECK, 0, 1, 1, 0},
     {"CJ_VSYNC", "V-Sync", "Sync to the monitor. Off has the lowest input lag.", PCS_CHECK, 0, 1, 1, 0},
     {"CJ_TEX_REPLACE", "Texture Packs", "Use replacement textures from the textures folder. Applies after a restart.",
@@ -102,6 +102,19 @@ static void init_vals(void)
         }
         s_val[i] = clampv(i, v);
     }
+}
+
+/* A default that depends on the machine (Resolution Scale from the screen size): used
+ * only when neither pcj.ini nor the environment set the value, and not saved. */
+void pcs_set_default(int id, int v)
+{
+    init_vals();
+    if (id < 0 || id >= NSET) return;
+    {
+        const char *e = getenv(s_set[id].key);
+        if (e && *e) return;
+    }
+    s_val[id] = clampv(id, v);
 }
 
 int pcs_get(int id)

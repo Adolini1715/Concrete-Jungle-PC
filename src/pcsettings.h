@@ -11,6 +11,7 @@ int pcs_get(int id);
 unsigned pcs_gen(int id);          /* changes whenever the value changes */
 void pcs_set(int id, int v);       /* also exports the env var and schedules the pcj.ini save */
 void pcs_set_ini_path(const char *p);
+void pcs_set_default(int id, int v); /* when pcj.ini / the environment leave it unset; not saved */
 void pcs_rebind(char *p);          /* quick load: the block now lives at p (guest RAM) */
 void pcs_tick(void);               /* game thread, once per frame */
 #ifdef __cplusplus

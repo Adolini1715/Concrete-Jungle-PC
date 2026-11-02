@@ -320,3 +320,15 @@ float cjmod_attack_carry(float mul)
     return powf(base, mul);   /* mul: XApp::GameFrameRateMul(), as the game's own per-frame decays use */
 }
 
+
+/* CJ_GRAB_LOG=1 (mods/Player.cpp DoJump): falling ledge-catch diagnostics. what 0: a ledge found
+ * (a = its height above the hands, b = horizontal distance), 1: facing refused (a = angle),
+ * 2: no room along the ledge, 3: shimmy angle refused. */
+void cjmod_grab_log(int what, int flags, float a, float b, float mul, float probe_y)
+{
+    static int on = -1;
+    static unsigned n;
+    if (on < 0) { const char *e = getenv("CJ_GRAB_LOG"); on = e && *e == '1'; }
+    if (!on || n++ > 4000) return;
+    fprintf(stderr, "[GRAB] %d flags=%x a=%.3f b=%.3f mul=%.3f hands=%.3f\n", what, flags, a, b, mul, probe_y);
+}

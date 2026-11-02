@@ -6,15 +6,16 @@ what ships in this repository. Experiments that were tried and dropped are noted
 
 ## At a glance
 
-- **Two weeks of work**, October 17 to October 31, 2026.
-- **225 commits** to the port and **687 commits** to the decompilation it builds on.
+- **Two weeks of work**, October 17 to November 1, 2026.
+- **240 commits** to the port and **687 commits** to the decompilation it builds on.
 - **12,072 of the game's 13,795 functions** rewritten as C++ by the decompilation, across
   244 source units, about 79% of the game's code by size. **10,386** of them compile back to the
   exact bytes of the original.
 - **138 functions** run as native code compiled from that decompiled C++, in place of their
   machine-translated versions. **18** of those are deliberately modified (movement, camera,
   menus) in `mods/`.
-- **7 bugs fixed in the recompiler toolkit and runtime**, and **4 in the original game itself**.
+- **7 bugs fixed in the recompiler toolkit and runtime**, and **6 in the original game itself**, two
+  of them in its own 60 fps support.
 
 The whole project was built with AI assistance (Claude), directed and play-tested by one person.
 It is a first release. More eyes on it are welcome, and so are bug reports.
@@ -53,7 +54,13 @@ No game code or data is in this repository. You build the port from your own dis
 - Controller rumble, and an analog stick dead zone that no longer snaps to the four directions.
 - A Windows installer: put your disc image or extracted disc in a folder and double-click
   `Install.bat`. It fetches pinned build tools into that folder (no WSL, no administrator
-  rights), builds the game from your copy, and leaves it ready with a desktop shortcut.
+  rights), checks that it is the Xbox release it supports (it tells you if you gave it the
+  PlayStation 2 disc), builds the game from your copy in about 10 minutes, and leaves it in a
+  game folder next to the installer's with a desktop shortcut.
+- Sensible first-run defaults: widescreen on, the internal resolution matched to your screen
+  (3x for 1080p and 1440p, 5x for 4K), and vertical look the right way up (the original inverted
+  it, in third and first person). All of them are in Options.
+- F7 switches between 30 and 60 fps at any time, to compare.
 - A first-run folder picker for your game files; settings saved to `pcj.ini`.
 
 ### Controls and movement
@@ -97,7 +104,8 @@ No game code or data is in this repository. You build the port from your own dis
 ### Saves
 
 - Quick save (F5) and quick load (F8), also on the controller (click both sticks to save, press
-  both bumpers to load).
+  both bumpers to load). A quick save is a snapshot of the running game, so it only loads into
+  the exact build of `pcj.exe` that made it; another build says so instead of loading it.
 - Save Game and Load Game in the pause menu, with five slots per chapter.
 
 ### Textures and mods
@@ -127,9 +135,21 @@ No game code or data is in this repository. You build the port from your own dis
   record each time until it overruns memory. No Xbox icon was wide enough to trigger it; the PC
   keycaps follow the key's width, and "Tab" did, in the weapon selector. The layout now sees a box
   wide enough for its widest icon or letter.
+- **Ledge grabs at 60 fps.** The game has its own 60 fps mode, scaled by a frame-rate multiplier
+  that is 2 at 30 fps and 1 at 60. The automatic ledge catch scaled two distances by it as if they
+  were per-frame steps: how far it searches for a ledge, and how far above the hands a ledge can be
+  caught at the top of a jump. At 60 fps both halved, and a jump that peaks just under a ledge (a
+  charged jump onto the high walls of the first level) caught it at 30 fps and missed it at 60.
+  Perch landings had the same fault. Both now keep their 30 fps distances at any frame rate. Found
+  by playing the same jump at 30 and 60 fps (F7) with the catch logged frame by frame.
 - **Uneven letter spacing.** Text is laid out in whole 640x480 units, so any scaled text gained
   random gaps ("Ne w Ga me"). Spacing is now computed per letter from the font's actual ink, at
   whatever size the text is drawn, with a little more room between letters than before.
+- **Clipped text.** Right-aligned text ends exactly on its box's edge, where the menus clip, so
+  numbers in the chapter statistics lost their last column. And the PC keycaps are wider than the
+  Xbox icons the footers were laid out for: three prompts in the pause menu's footer did not fit.
+  Right-aligned text keeps a few units clear of the edge, and a prompt too wide for its box is drawn
+  slightly smaller instead of cut off.
 
 ### In the recompiler toolkit and runtime
 

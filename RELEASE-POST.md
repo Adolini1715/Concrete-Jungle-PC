@@ -11,8 +11,10 @@ repo. You build it from your own copy of the game.
 
 **Graphics**
 - OpenGL 3.3 renderer for the Xbox GPU (register combiners and vertex programs as GLSL).
-- Up to 5x internal resolution (3200x2400, for 4K screens), the game's own 16:9 widescreen, fullscreen.
-- 60 fps option (the original is capped at 30).
+- Up to 5x internal resolution (3200x2400, for 4K screens; it starts matched to your screen),
+  the game's own 16:9 widescreen (on by default), fullscreen.
+- 60 fps option (the original is capped at 30), with F7 to switch live. The game's own 60 fps
+  code missed ledges and perches it catches at 30; fixed.
 - Texture packs: drop folders or .zip packs in `textures/`, F3 toggles them live.
 
 **Sharp UI (built in)**

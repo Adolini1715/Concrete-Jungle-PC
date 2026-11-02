@@ -11,7 +11,7 @@ Steps (each is skipped when a previous run finished it):
   3. fetch the recompiler toolkit and the decompilation
   4. recompile default.xbe into C (the long step)
   5. compile pcj.exe
-  6. put it all in "Predator Concrete Jungle PC" with a desktop shortcut
+  6. put it all in "Predator Concrete Jungle PC" next to this folder, with a desktop shortcut
 """
 import hashlib
 import os
@@ -26,14 +26,16 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 GAME_IN = os.path.join(REPO, "PUT YOUR GAME HERE")
-OUT = os.path.join(REPO, "Predator Concrete Jungle PC")
+# The game goes next to this folder, not inside it: once installed, this whole
+# folder (sources, tools, build) can be deleted.
+OUT = os.path.join(os.path.dirname(REPO), "Predator Concrete Jungle PC")
 
 XBE_SHA1S = {"7fbc1249c5948d638a62101cc2d23d6637b76284",   # USA retail, as on the disc
              "30a1e430892c9e472122a3a25d90a233e42b99cd"}   # the same with 3 certificate bytes changed
 XR_URL = "https://github.com/sp00nznet/xboxrecomp"
 XR_REV = "6376eb829e035d23c1c65377d8523eceb068ee1d"         # v0.15.0
 DECOMP_URL = os.environ.get("PCJ_DECOMP_URL", "https://github.com/Adolini1715/Concrete-Jungle-Decomp")
-DECOMP_REV = os.environ.get("PCJ_DECOMP_REV", "8b5077a462900e7bc31f54a494aded252667bfeb")   # v0.1
+DECOMP_REV = os.environ.get("PCJ_DECOMP_REV", "4e4ce60f11c2c074cad61f9672d17b434e71de53")   # v0.1
 EPOXY_URL = "https://github.com/anholt/libepoxy"
 EPOXY_REV = "c84bc9459357a40e46e2fec0408d04fbdde2c973"      # 1.5.10
 SDL_VER = "2.30.9"
@@ -197,6 +199,26 @@ def cp(src, dst):
     return dst
 
 
+def disc_kind(path):
+    """'xbox' for an Xbox disc image (XDVDFS, trimmed or a full dump), 'ps2' for the PlayStation 2
+    release (an ISO 9660 disc with SYSTEM.CNF), else 'other'."""
+    try:
+        with open(path, "rb") as f:
+            for base in (0, 0x18300000, 0x30600000, 0x2080000, 0xFD90000):
+                f.seek(base + 32 * 2048)
+                if f.read(20) == b"MICROSOFT*XBOX*MEDIA":
+                    return "xbox"
+            f.seek(16 * 2048)
+            if f.read(6)[1:6] == b"CD001":
+                f.seek(0)
+                head = f.read(4 << 20)
+                if b"SYSTEM.CNF" in head or b"BOOT2" in head:
+                    return "ps2"
+    except OSError:
+        pass
+    return "other"
+
+
 def find_xbe(folder):
     for root, dirs, files in os.walk(folder):
         for f in files:
@@ -303,6 +325,14 @@ def main():
             if os.path.isdir(GAME_IN) else []
         disc = find_xbe(GAME_IN) if os.path.isdir(GAME_IN) else None
         free = shutil.disk_usage(REPO).free
+        kinds = {f: disc_kind(os.path.join(GAME_IN, f)) for f in isos}
+        if isos and not disc and not any(k == "xbox" for k in kinds.values()):
+            if any(k == "ps2" for k in kinds.values()):
+                fail("the disc image in \"PUT YOUR GAME HERE\" is the PlayStation 2 release of the game. This port "
+                     "is built from the original Xbox release: use an image of the Xbox disc.")
+            fail("the disc image in \"PUT YOUR GAME HERE\" is not an Xbox disc image (no Xbox file system in it). "
+                 "Use an image of the Xbox disc, or the folder you extracted it into.")
+        isos = [f for f in isos if kinds[f] == "xbox"]
         if isos:
             iso = os.path.join(GAME_IN, isos[0])
             need = os.path.getsize(iso) + (2 << 30)
@@ -473,11 +503,21 @@ def main():
 
     mins = (time.time() - t0) / 60
     say("\n" + "=" * 70)
-    say(f"Done in {mins:.0f} minutes. The game is in the \"Predator Concrete Jungle PC\" folder.")
+    say(f"Done in {mins:.0f} minutes. The game is in:")
+    say(f"    {OUT}")
     if lnk:
-        say("There is a shortcut on your desktop: \"Predator Concrete Jungle\".")
-    say("You can delete the \"PUT YOUR GAME HERE\" contents now; the game was copied.")
+        say("and there is a shortcut on your desktop: \"Predator Concrete Jungle\".")
+    say("")
+    say(f"Your game files were copied there, so this installer folder ({os.path.basename(REPO)})")
+    say("is no longer needed. Delete it to free the space, or keep it to rebuild later.")
+    if not os.path.abspath(root).startswith(os.path.abspath(REPO)):
+        say(f"The build folder {root} can go too.")
     say("=" * 70)
+    if win:
+        try:
+            os.startfile(OUT)   # show the finished game folder
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

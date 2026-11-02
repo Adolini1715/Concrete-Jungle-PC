@@ -329,6 +329,55 @@ static int fe_font_height(uint32_t self)
     return (int)(MEM32(ca + co + 0x10u) >> 16);
 }
 static int text_box_fit(uint32_t self, uint32_t tp, uint32_t rp, float scale_arg, int32_t *pox, int32_t *pow);
+/* A one-line button prompt ("~V Navigate") wider than its box: the PC keycaps and words are
+ * longer than the Xbox icons and words the footers were laid out for, and the widget clips the
+ * print to its own box, so growing the box does not help (the centred text only moves over).
+ * Shrink the text to fit instead, by at most a quarter. Button icons draw 1.5 lines high. */
+static float prompt_fit_scale(uint32_t self, uint32_t tp, uint32_t rp, float scale)
+{
+    uint8_t *M = (uint8_t *)xbox_GetMemoryOffset();
+    const char *t;
+    float total = 0.0f, chars = 0.0f, gmax = 0.0f;
+    uint32_t f = MEM32(self + 0xA8u), page = 0;
+    int fh = fe_font_height(self), i;
+    int32_t ow, oh;
+    if (!tp || !rp || tp >= 0x84000000u || rp >= 0x84000000u || !(scale > 0.0f && scale < 16.0f)) return scale;
+    t = (const char *)(M + tp);
+    if (!strchr(t, '~') || strchr(t, '\n') || strstr(t, "\\n")) return scale;
+    if (fh <= 0) fh = 32;
+    ow = (int32_t)MEM32(rp + 8u); oh = (int32_t)MEM32(rp + 12u);
+    if (ow <= 0 || oh <= 0 || oh >= 2 * (int32_t)((float)fh * scale)) return scale;
+    if (f) { uint32_t po = MEM32(f + 4u); if (po) page = f + 4u + po; }
+    for (i = 0; i < 56; i++) { float g = rdf(M, 0x00398818u + (uint32_t)i * 16u + 8u); if (g > gmax && g < 8.0f) gmax = g; }
+    for (; *t; t++) {
+        unsigned char c = (unsigned char)*t;
+        if (c == '~' && t[1]) {
+            int idx = (unsigned char)t[1] - '#';
+            float sc = gmax;
+            if (idx >= 0 && idx < 66) {
+                uint32_t b = 0x00398B98u + (uint32_t)idx * 12u, g = MEM32(b + 4u);
+                if (!MEM32(b + 8u) && g >= 0x00398818u && g < 0x00398818u + 56u * 16u) sc = rdf(M, g + 8u);
+            }
+            total += sc;
+            t++;
+            continue;
+        }
+        if (page && MEM32(page + c * 4u)) {
+            uint32_t e = page + c * 4u + MEM32(page + c * 4u);
+            uint16_t w, k;
+            memcpy(&w, M + e + 0x10u, 2); memcpy(&k, M + e + 0x14u, 2);
+            chars += (float)(w - k);
+        }
+    }
+    {
+        float whole = (chars + total * (float)fh * 1.5f) * scale + 4.0f, k;
+        if (whole <= (float)ow || whole > (float)ow * 3.0f) return scale;
+        k = ((float)ow - 2.0f) / whole;
+        if (k < 0.75f) k = 0.75f;
+        return scale * k;
+    }
+}
+
 static void fe_fontprint_rect_0010FF80(void)
 {
     uint32_t self = g_ecx, font = MEM32(self + 0x2A0u);
@@ -376,6 +425,11 @@ static void fe_fontprint_rect_0010FF80(void)
         memcpy(&raw, &sc, 4);
         MEM32(a) = raw;
     }
+    {   /* a button prompt too wide for its box: smaller rather than cut off */
+        float sc0 = rdf((uint8_t *)xbox_GetMemoryOffset(), g_esp + 0xCu);
+        float sc1 = prompt_fit_scale(self, MEM32(g_esp + 4u), MEM32(g_esp + 8u), sc0);
+        if (sc1 != sc0) { uint32_t raw; memcpy(&raw, &sc1, 4); MEM32(g_esp + 0xCu) = raw; }
+    }
     {
         float fs;
         uint32_t rw = MEM32(g_esp + 0xCu);
@@ -385,9 +439,19 @@ static void fe_fontprint_rect_0010FF80(void)
     {   /* the draw clips to the box, so a box the text must grow into grows for the whole print */
         uint32_t tp = MEM32(g_esp + 4u), rp = MEM32(g_esp + 8u);
         int32_t ox = 0, ow = 0;
+        uint32_t align = MEM32(g_esp + 0x10u), x0 = rp ? MEM32(rp) : 0, w0 = rp ? MEM32(rp + 8u) : 0;
         int widened = text_box_fit(self, tp, rp, rdf((uint8_t *)xbox_GetMemoryOffset(), g_esp + 0xCu), &ox, &ow);
+        /* Right-aligned text (CalculateAlignment 6-8) ends exactly on the box's right edge, and the
+         * window clips there: the last glyph's right side and its drop shadow were cut off (the
+         * chapter statistics' "0/1"). Keep a few units clear of the edge. */
+        if (rp && align >= 6u && align <= 8u) {
+            int fh = fe_font_height(self);
+            float sc = rdf((uint8_t *)xbox_GetMemoryOffset(), g_esp + 0xCu);
+            int pad = (int)((float)(fh > 0 ? fh : 16) * (sc > 0.0f && sc < 16.0f ? sc : 1.0f) * 0.15f) + 2;
+            MEM32(rp) = MEM32(rp) - (uint32_t)pad;
+        }
         recomp_lookup(0x0010FF80u)();
-        if (widened) { MEM32(rp) = (uint32_t)ox; MEM32(rp + 8u) = (uint32_t)ow; }
+        if (rp && (widened || (align >= 6u && align <= 8u))) { MEM32(rp) = x0; MEM32(rp + 8u) = w0; }
     }
 }
 
@@ -474,6 +538,22 @@ static void exdisplay_begindraw_00225220(void)
         }
     }
     recomp_lookup(0x00225220u)();
+}
+
+/* XItemHandler_Camera::Initialise (0x000C1DC0, thiscall, virtual). The game starts with
+ * vertical look inverted, in third and first person (m_bInvertY 0x109, m_bInvertFPY 0x10B
+ * set to 1), as console games of its time did; on a PC with a mouse that reads as backwards.
+ * New settings start with up looking up. Saved settings still apply afterwards (GameData
+ * copies them onto the camera), and Options > Controller can turn inversion back on. */
+static void camera_initialise_000C1DC0(void)
+{
+    uint32_t self = g_ecx;
+    recomp_lookup(0x000C1DC0u)();
+    if (self >= 0x10000u && self < 0x84000000u) {
+        uint8_t *cam = (uint8_t *)xbox_GetMemoryOffset() + self;
+        cam[0x109] = 0;   /* m_bInvertY */
+        cam[0x10B] = 0;   /* m_bInvertFPY */
+    }
 }
 
 /* XWnd::GetStringProperties (0x0010E2F0, thiscall: text, const EXRect &, XStringInfo *, align, scale;
@@ -575,6 +655,7 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
     if (xbox_va == 0x0010E2F0u) return xwnd_string_props_0010E2F0;
     if (xbox_va == 0x00225220u) return exdisplay_begindraw_00225220;
+    if (xbox_va == 0x000C1DC0u) return camera_initialise_000C1DC0;
     if (xbox_va == 0x0010FF80u) return fe_fontprint_rect_0010FF80;
     if (xbox_va == 0x0024DDD0u) return fe_sel_tex_0024DDD0;
     if (xbox_va == 0x0010C970u) return fe_textsize_0010C970;
@@ -1009,6 +1090,9 @@ static void cj_modern_controls_tick(uint8_t *mem)
         cj_text_builtin(0x510001F4u, "~L/~R Move  ~V Navigate  ~E Select");
         cj_text_builtin(0x510001F6u, "~L/~R Move  ~V Navigate");
         cj_text_builtin(0x51000202u, "~L/~R Move  ~V Navigate  ~H Change");
+        /* the checkbox footer: "Toggle" after the wide Enter keycap runs one letter past its box
+         * (the footer centres each prompt in a box sized for the Xbox icon); "Select" fits */
+        cj_text_builtin(0x510004D7u, "~E Select");
         cj_text_builtin(0x510002BBu, "~L/~R Move  ~V Navigate  ~E View");
         cj_text_builtin(0x51000473u, "~V Navigate");
         cj_text_builtin(0x51000517u, "~6 Navigate");

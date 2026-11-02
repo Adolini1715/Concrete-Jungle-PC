@@ -58,10 +58,12 @@ a pinned SHA-256 or git commit), the recompiler toolkit
 your `default.xbe` is the release it supports, recompiles it and compiles `pcj.exe`. The first
 run takes a while (see the window for progress); if it stops, run it again and it carries on.
 
-When it is done, the game is in the **`Predator Concrete Jungle PC`** folder, with your game
-files copied into it, and there is a desktop shortcut. Nothing is installed on the system and
-no administrator rights are needed: everything stays in this folder (or in `C:\PCJ-build` when
-the folder's path has a space in it). To uninstall, delete the folder.
+When it is done, the game is in a **`Predator Concrete Jungle PC`** folder next to the one you
+unzipped (for example `C:\Games\Predator Concrete Jungle PC`), with your game files copied into
+it, and there is a desktop shortcut. The unzipped folder is then no longer needed and can be
+deleted. Nothing is installed on the system and no administrator rights are needed (the build
+happens inside the unzipped folder, or in `C:\PCJ-build` when its path is long or has a space in
+it). To uninstall, delete the game folder.
 
 ## Getting your game files
 

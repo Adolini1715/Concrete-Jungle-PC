@@ -1077,6 +1077,14 @@ static int init(void)
         s_depthq_on = 0;
     if ((e = getenv("CJ_GL_TEXHASH")) && *e == '0')
         s_texhash_full = 0;
+    {   /* Resolution Scale left unset: render at least at the screen's height
+         * (1080p -> 3, 1440p -> 3, 4K -> 5), so the picture is sharp from the start */
+        SDL_DisplayMode dm;
+        if (SDL_GetDesktopDisplayMode(s_win ? SDL_GetWindowDisplayIndex(s_win) : 0, &dm) == 0 && dm.h > 0) {
+            int want = (dm.h + 479) / 480;
+            pcs_set_default(PCS_SCALE, want < 2 ? 2 : want > 5 ? 5 : want);
+        }
+    }
     s_rs = pcs_get(PCS_SCALE);
     if (s_rs > 1) fprintf(stderr, "[GL] internal resolution x%d (CJ_GL_SCALE)\n", s_rs);
     if ((e = getenv("CJ_GL_FOGPIX")) && *e == '0')
@@ -3209,6 +3217,13 @@ static void gl_flip(void)
                 qs_osd_note(on ? "Texture packs ON (F3)" : "Texture packs OFF (F3)");
             } else
                 qs_osd_note("No texture packs installed");
+        }
+        if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F7) {   /* frame rate 30 / 60 */
+            extern void qs_osd_note(const char *m);
+            int fps = pcs_get(PCS_FPS) == 60 ? 30 : 60;
+            pcs_set(PCS_FPS, fps);   /* applied live (recomp_manual.c), saved to pcj.ini like the page */
+            qs_osd_note(fps == 60 ? "Frame rate 60 (F7)" : "Frame rate 30 (F7)");
+            gamelog_event("fps", "\"to\":%d", fps);
         }
         if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F12) s_shot_req = 1;
         if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {

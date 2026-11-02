@@ -5,6 +5,7 @@
 // src/native/hybrid/cjmod_move.c): CJ_RUN_ACCEL scales the speed-up, CJ_RUN_STOP the slow-down
 // (the original keeps 93.75% of the speed each frame when stopping: the slide),
 // CJ_TURN_RATE the running turn. All stay frame-rate correct (exponents on the per-frame factors).
+extern "C" void cjmod_grab_log(int what, int flags, float a, float b, float mul, float probe_y);
 extern "C" float cjmod_run_accel(void);
 extern "C" float cjmod_run_stop(void);
 extern "C" float cjmod_turn_rate(void);
@@ -705,4 +706,232 @@ void XItemHandler_Player::DoHit()
     if (bSetTime) m_Unk224 = bHeavy ? 2.0f : 1.0f;
     SetupMove(6, 0, -1.0f);
     if (m_AttackState > 3) m_Unk224 = 2.0f;
+}
+
+// MOD 0016b130
+// DoJump at 60 fps: falling ledge grabs searched half the radius and allowed half the height above the
+// hands (distances scaled as if they were per-frame steps); both are the original at 30 fps. (The jump
+// boost while the button is held is already frame-rate correct: its window runs on the multiplier.)
+void XItemHandler_Player::DoJump()
+{
+    if (0.0f >= m_Health) {
+        m_DeadFallTimer -= XApp::FrameLength();
+        if (0.0f > m_DeadFallTimer) {
+            theApp.m_MissionState = 4;
+            theApp.m_MissionTimer = 0.0f;
+            return;
+        }
+    }
+    if (m_Mode == 3 && m_bAnimEnded) {
+        m_bAnimEnded = 0;
+        if (m_SubMode >= 7 && m_SubMode <= 10) SetupMove(3, 10, -1.0f);
+    }
+    XItemPhysics *pPhys = (XItemPhysics *)m_pItem->m_pItemPhysics;
+    if (m_Mode == 3) {
+        if (m_SubMode == 0xc && 0.17f > pPhys->m_DeltaMove.y) SetupMove(3, 0xd, -1.0f);
+        if (m_SubMode >= 7 && m_SubMode <= 10) {
+            Actor *pTarget = GetTargetActor();
+            EXPlacementItem *pItem = m_pItem;
+            float x, z;
+            if (pTarget) {
+                EXVector d;
+                const EXVector &tp = ((EXPlacementItem *)pTarget->GetItem())->Position();
+                const EXVector &pp = pItem->Position();
+                d.x = tp.x - pp.x; d.y = tp.y - pp.y; d.z = tp.z - pp.z; d.w = tp.w - pp.w;
+                x = d.x; z = d.z;
+            } else {
+                float yaw = pItem->Rotation().y;
+                x = (float)sin(yaw) * 10.0f;
+                z = (float)cos(yaw) * 10.0f;
+            }
+            float diff = Vec_AngleDifference(pItem->Rotation().y, (float)atan2(x, z));
+            EXVector rot = pItem->Rotation();
+            float step = diff >= 0.16f ? 0.16f : (-0.16f >= diff ? -0.16f : diff);
+            rot.y += step;
+            pItem->m_rotation = rot;
+            pItem->m_validMtx = 0;
+        }
+    }
+    MoveJump();
+
+    if (m_bJumpTarget) {
+        const EXVector &pp = m_pItem->Position();
+        float dx = pp.x - m_JumpTarget.x, dy = pp.y - m_JumpTarget.y, dz = pp.z - m_JumpTarget.z;
+        if (0.5f > sqrtf(dx * dx + dy * dy + dz * dz)) {
+            if (m_JumpTargetType == 2) {
+                Actor *pActor = GetTargetActor();
+                if (pActor) {
+                    DeadStop(1);
+                    pPhys->SetPhysicsFlagsOn(3);
+                    m_SpecialActorID = pActor->m_RefID;
+                    if (AS_GetPtrFromIndex(pActor->m_SkinIndex)->m_Hash == 0xd000068 ||
+                        AS_GetPtrFromIndex(pActor->m_SkinIndex)->m_Hash == 0xd000179) {
+                        SetupMove(0x14, 2, -1.0f);
+                        EXVector a(0.0f, 0.0f, 0.0f, 0.0f), b(0.0f, 0.0f, 0.0f, 0.0f);
+                        SendMsg_AttackedByPredator(pActor, 0x30, a, b, 0.0f, 0);
+                    } else {
+                        SetupMove(0x14, 0, -1.0f);
+                    }
+                    EXBaseSoundManager::GetSoundManager()->StartSound(0x1af00353, m_pItem->Position(), -1, 0);
+                    return;
+                }
+            } else if (m_JumpTargetType == 1) {
+                DeadStop(1);
+                SetupMove(0x15, 0, -1.0f);
+                LandedOnVehicle();
+                EXBaseSoundManager::GetSoundManager()->StartSound(0x1af00353, m_pItem->Position(), -1, 0);
+                return;
+            }
+        }
+    }
+
+    int result = -1;
+    EXGrabPointTemp g;
+    if (!m_HoldState && !(0.0f >= m_Health) && !(m_Unk358 > 0.0f)) {
+        EXPlacementItem *pItem = m_pItem;
+        pPhys = (XItemPhysics *)m_pItem->m_pItemPhysics;
+        float mul = XApp::GameFrameRateMul();
+        EXVector probe = pItem->Position();
+        probe.y += 1.25f;
+        int ok = 1;
+        if (pPhys->m_DeltaMove.y > 0.0f) {
+            // rising: a ledge in reach
+            g.Set(probe, 1.5f, (EXGrabPointTemp::GRABFITYPE)2);
+            theItemEnv.DoGrabPointToMap(g);
+            if (g.m_24 != 2 || (g.m_28 & 0x100)) ok = 0;
+            else result = 1;
+        }
+        if (ok && 0.0f > pPhys->m_DeltaMove.y) {
+            // falling: perch plane, perch, then a ledge
+            // MOD: the search radius is a distance, not a per-frame step. The original scaled it by
+            // the frame-rate multiplier (GameFrameRateMul: 2 at 30 fps, 1 at 60), so at 60 fps it was
+            // half. Never less than at 30 fps (mul 2), where this is the original.
+            float r = (mul > 2.0f ? mul : 2.0f) * 2.5f;
+            result = -1;
+            g.Set(m_pItem->Position(), r, (EXGrabPointTemp::GRABFITYPE)2);
+            theItemEnv.DoGrabPointToMap(g);
+            // MOD: CheckPerchPlaneLand / CheckPerchLand inline (DoJump is their only caller): their
+            // height window, mul * 0.3, is 0.6 at 30 fps and only 0.3 at 60, so perches caught at
+            // 30 fps were missed at 60. The 30 fps window at any rate, as for the ledges below.
+            float pw = (mul > 2.0f ? mul : 2.0f) * 0.3f;
+            const EXVector &pp0 = m_pItem->Position();
+            float pdx = g.m_30.x - pp0.x, pdz = g.m_30.z - pp0.z;
+            if (g.m_24 == 2 && (g.m_28 & 0x100) && !(sqrtf(pdx * pdx + pdz * pdz) > 0.5f) &&
+                !((float)fabs(g.m_30.y - pp0.y) > pw)) {
+                result = 5;
+            } else {
+                g.Set(probe, r, (EXGrabPointTemp::GRABFITYPE)1);
+                theItemEnv.DoGrabPointToMap(g);
+                unsigned int flags = g.m_28;
+                if (g.m_24 == 1)   // CJ_GRAB_LOG=1: each falling frame that finds a ledge, and why it is not caught
+                    cjmod_grab_log(0, (int)flags, g.m_30.y - probe.y, sqrtf((g.m_30.x - m_pItem->Position().x) * (g.m_30.x - m_pItem->Position().x) +
+                                   (g.m_30.z - m_pItem->Position().z) * (g.m_30.z - m_pItem->Position().z)), mul, probe.y);
+                if (g.m_24 == 1 && !(flags & 0x20)) {
+                    float qdx = g.m_30.x - m_pItem->Position().x, qdz = g.m_30.z - m_pItem->Position().z;
+                    if ((flags & 0x100) && !(sqrtf(qdx * qdx + qdz * qdz) > 0.5f) &&
+                        !((float)fabs(g.m_30.y - m_pItem->Position().y) > pw)) {
+                        result = 5;
+                    } else if (!((float)fabs(g.m_30.y - probe.y) > (mul > 2.0f ? mul : 2.0f) * 0.5f)) {
+                        // MOD: the height window is also how far above the hands a ledge can be
+                        // caught at the top of the jump: 1.0 at 30 fps, but scaled by the multiplier
+                        // only 0.5 at 60, so a jump that peaks just under a ledge missed it.
+                        EXPlacementItem *pI = m_pItem;
+                        float hx = g.m_30.x - pI->Position().x, hz = g.m_30.z - pI->Position().z;
+                        if (!(sqrtf(hx * hx + hz * hz) > 1.5f)) {
+                            float a = (float)atan2(g.m_Normal.x, g.m_Normal.z);
+                            EXVector rot = pI->Rotation();
+                            float ex = pI->Position().x - g.m_EdgePos.x, ez = pI->Position().z - g.m_EdgePos.z;
+                            float flip = 0.0f;
+                            int fail = 0;
+                            if (Vec_AngleDifference((float)atan2(ex, ez), a) < 0.0f) {
+                                if (!(flags & 0x100)) fail = 1;
+                                else { flip = 1.0f; a += 3.1415927f; }
+                            }
+                            if (!fail) {
+                                float e = (float)fabs(Vec_AngleDifference(rot.y, a) + 1.5707964f);
+                                if (flags & 8) { if (e > 1.3744468f) fail = 1; }
+                                else if (e > 1.1780972f) fail = 1;
+                            }
+                            if (fail) cjmod_grab_log(1, (int)flags, Vec_AngleDifference(rot.y, a), 0.0f, mul, probe.y);
+                            else if (!CheckLineSegSpace(g, a)) cjmod_grab_log(2, (int)flags, 0.0f, 0.0f, mul, probe.y);
+                            else if (!HandleShimmyAngle(g.m_30, a, 0, a)) cjmod_grab_log(3, (int)flags, 0.0f, 0.0f, mul, probe.y);
+                            if (!fail && CheckLineSegSpace(g, a) && HandleShimmyAngle(g.m_30, a, 0, a)) {
+                                float yaw = a;
+                                if (flip != 0.0f) yaw += 3.1415927f;
+                                pI->m_rotation = EXVector(rot.x, yaw, rot.z, rot.w);
+                                pI->m_validMtx = 0;
+                                result = (flags & 8) ? 2 : ((flags & 0x100) ? 4 : 3);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (result != -1) {
+            // caught something: the landing
+            float dy = pPhys->m_DeltaMove.y;
+            pPhys->m_physicsFlags |= 3;
+            if (-0.5f > dy) {
+                InflictDamageFromFall(dy);
+                float f = (float)fabs(dy);
+                float k = f >= 1.0f ? 1.0f : (0.5f >= f ? 0.5f : f);
+                ((XGamePad *)EXBaseGamePad::GetGamePad())->PlayRumble(0x54000007, k, m_PadIndex);
+            }
+            pPhys->m_DeltaMove.y = 0.0f;
+            m_StateFlags = g.m_28;
+            m_ClamberPos = g.m_30;
+            m_bLedgeTarget = 0;
+            ResetAttack();
+            m_pAnim->DeleteStack(1);
+            EXBaseSoundManager::GetSoundManager()->StartSound(0x1af0020e, m_pItem->Position(), -1, 0);
+        }
+    }
+
+    switch (result) {
+    case 1: {
+        m_ShimmyDir = GetSpeed() + 1.0f;
+        if (1.0f > m_ShimmyDir) m_ShimmyDir = 1.0f;
+        if (m_ShimmyDir > 2.0f) m_ShimmyDir = 2.0f;
+        DeadStop(0);
+        SetupMove(0x11, 0, -1.0f);
+        return;
+    }
+    case 2:
+        DeadStop(0);
+        m_ClamberSide = 1;
+        m_LockHandIdx = 2;
+        SetupMove(0xc, 8, -1.0f);
+        return;
+    case 3:
+        if (m_StateFlags & 0x40) {
+            DeadStop(0);
+            SetupMove(0xc, 5, -1.0f);
+            return;
+        }
+        DeadStop(0);
+        if (m_Pad.z > 0.85f && !(m_StateFlags & 0x10) && !(m_StateFlags & 0x200) && CheckForClamberSpace()) {
+            SetupMove(4, (GetCardRandom() & 1) ? 4 : 3, -1.0f);
+            return;
+        }
+        SetupMove(0xc, 0, -1.0f);
+        return;
+    case 4:
+        DeadStop(0);
+        SetupMove(0xc, (m_StateFlags & 0x40) ? 5 : 0, -1.0f);
+        return;
+    case 5:
+        DeadStop(0);
+        m_ShimmyDir = 1.5f;
+        SetupMove(0x12, 0, -1.0f);
+        m_HangYaw = m_pItem->Rotation().y;
+        m_Unk360 = 8.0f;
+        m_bUnk364 = 1;
+        return;
+    }
+    if (!m_HoldState && m_Health > 0.0f && CheckWallMove()) return;
+    if (m_Unk344 > 0.0f) {
+        if (0.0f >= m_Unk344 - 8.0f && (m_ButtonsPressed & 0x20)) pPhys->m_Accel.y = 0.02440000f;
+        m_Unk344 -= XApp::GameFrameRateMul();
+    }
+    CheckForLand();
 }
