@@ -110,6 +110,9 @@ keys and settings.
 - `docs/` has notes on each part (texture packs, saves, prompts, settings, determinism,
   recording and replay).
 
+
+Link to HD Textures: https://archive.org/details/pcj-scarface-hd-pack
+
 ## Known issues
 
 - Only the USA retail release is supported.
