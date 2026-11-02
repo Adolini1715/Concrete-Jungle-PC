@@ -208,7 +208,7 @@ weapons as 3D objects with no menu items at all; there, the game's selection cod
 located in the original machine code, and the click areas were measured from a screenshot and traced
 outlines of every slot.
 
-**Testing without a person.** The last day added an automated tour (`tools/tour.py`). It boots the
+**Testing without a person.** The last days added an automated tour (`tools/tour.py`). It boots the
 port, drives it through the menus, PC Settings, a level, weapon select and the pause menu with the
 pad, the keyboard and the mouse, adds minutes of random input, screenshots every step and flags any
 crash, freeze or wild call; it also runs the Windows build under Wine. A test mode that draws only
@@ -218,14 +218,39 @@ cut off on the title screen. Freezes write `pcj-freeze.txt` with the game thread
 memory watch (`RECOMP_WATCH`) names the code that writes a given address, which is how the text
 layout bug above was found.
 
+**Installing on a real PC, and playing at 60 fps.** The release day went into the first install
+on a player's Windows PC and a long play session at 60 fps, with the port's own logs read after
+each run. That found what no test machine had:
+- **A crash that turned out to be a stale quick save.** A quick save is a snapshot of the running
+  game's memory. Loading one made by an older build of `pcj.exe` left pointers into code that had
+  moved, and the game crashed minutes later at the pause menu. Saves now carry a fingerprint of
+  the program's layout, and another build declines them with a message.
+- **The 60 fps ledge grabs.** A charged jump onto a high wall on the first level worked at 30 fps
+  and never at 60. F7 was added so the same jump could be tried at both rates in one session, and
+  the ledge catch logged frame by frame (`CJ_GRAB_LOG=1`). The log showed the ledge 0.76 above the
+  hands at the top of the jump: inside the 30 fps window, outside the 60 fps one. Along the way a
+  wrong first theory doubled the held-button jump boost at 60 fps (12-unit jumps); the logs caught
+  that too, and the boost is the original's.
+- **Text cut off by the PC keycaps** in the pause menu footer, and right-aligned numbers clipped
+  in the chapter statistics.
+
 ## Tried and dropped
 
 - **A widescreen squeeze for the menus.** The original stretches its 4:3 menus to fill a 16:9
   screen. Several approaches to restore their proportions were built and removed; menus are drawn
   exactly as the original.
 - **A turn-and-flip move** (flipping forward out of a pivot). It did not feel right in play.
+- **Scaling the held-button jump boost by frame rate.** It was already correct: it runs over a
+  window counted with the frame-rate multiplier. Scaling it doubled the boost at 60 fps.
 
 ## Known issues
 
-- Only the USA retail disc is supported.
+- Only the USA retail Xbox disc is supported (the installer says so for other releases and for the
+  PlayStation 2 disc).
+- Car and building lights appear to be drawn with an extra see-through "glow" copy of the lit windows,
+  slightly larger and nearer the camera. On a 2005 TV it blurred into a halo; at high resolution
+  it reads as a sharp double image. This is the original game's look; an option to soften it may
+  come later.
+- A quick save only loads into the build of `pcj.exe` that made it: after updating, start the
+  chapter and save again.
 - HD textures so far cover Scarface, his weapons, and the Jungle Hunter and City Hunter costumes.
