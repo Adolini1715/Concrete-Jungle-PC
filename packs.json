@@ -33,6 +33,28 @@
       "urls": [
         "https://archive.org/download/pcj-scarface-hd-pack/pcj-city-hunter-hd.zip"
       ]
+    },
+    {
+      "id": "alien-hunter",
+      "name": "Alien Hunter HD",
+      "about": "The Alien Hunter costume in HD",
+      "file": "pcj-alien-hunter-hd.zip",
+      "size": 9637150,
+      "sha1": "fc80d707ba0024461b4eb80011fe01581a34744a",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-alien-hunter-hd.zip"
+      ]
+    },
+    {
+      "id": "ritual",
+      "name": "Ritual HD",
+      "about": "The Ritual costume in HD",
+      "file": "pcj-ritual-hd.zip",
+      "size": 14624056,
+      "sha1": "0d766d141766d965401c90d75ae43cc9b0a547f7",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-ritual-hd.zip"
+      ]
     }
   ]
 }
