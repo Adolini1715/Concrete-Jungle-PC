@@ -1,3 +1,4 @@
+extern unsigned int g_xbox_contig_size;   /* xboxrecomp kernel.h: the contiguous window (uint32_t), 64 MB unless RECOMP_CONTIG_MB */
 /*
  * OpenGL 3.3 render back end for the toolkit's pushbuffer executor
  * (xboxrecomp v0.15 nv2a_backend.h + patches/v0.15/0007). Opt-in: CJ_GL=1
@@ -31,6 +32,9 @@
  *   CJ_GL_SHADER_LOG=1   print each generated combiner shader
  */
 #include <epoxy/gl.h>
+#ifndef CJ_ENV_ONCE   /* a setting read once per call site (getenv walks the environment each time) */
+#define CJ_ENV_ONCE(n) __extension__({ static const char *v_; static int g_; if (!g_) { v_ = getenv(n); g_ = 1; } v_; })
+#endif
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 #ifdef _WIN32
@@ -49,10 +53,174 @@
 #include "../xboxrecomp/src/kernel/nv2a_backend.h"
 #include "../xboxrecomp/src/d3d/d3d8_swizzle.h"
 #include "pcsettings.h"
+#include "shader_cache.h"
 #include "quicksave.h"
 #include <stdarg.h>
 
+/* ---- GL call filter ------------------------------------------------------------------------
+ * ~1,400 draws a frame each set the same twenty states, a dozen uniforms and sixteen vertex
+ * attributes again. Each wrapper below remembers what it last set and passes only a change on
+ * (CJ_GL_FILTER=0 passes everything). All of this file's GL state goes through them, so what they
+ * remember stays true. A deleted texture, or a deleted or relinked program, is forgotten. */
+static int cjc_on = -1;
+static unsigned long long cjc_pass, cjc_skip;
+static unsigned long long cjc_n_draw, cjc_n_prog, cjc_n_tex, cjc_n_vao;   /* per-frame state-change counts (frames.csv) */
+static int cjc_f(void) { if (cjc_on < 0) { const char *e = getenv("CJ_GL_FILTER"); cjc_on = !(e && *e == '0'); } return cjc_on; }
+/* a remembered value: key[] of n words, `ok` once set */
+typedef struct { int ok; unsigned k[6]; } CjcS;
+static int cjc_same(CjcS *s, int n, const unsigned *k)
+{
+    if (cjc_f() && s->ok && !memcmp(s->k, k, (size_t)n * 4)) { cjc_skip++; return 1; }
+    memcpy(s->k, k, (size_t)n * 4); s->ok = 1; cjc_pass++;
+    return 0;
+}
+static CjcS cjc_en[8], cjc_clip[2], cjc_bf, cjc_beq, cjc_bcol, cjc_df, cjc_dm, cjc_cmk, cjc_cull, cjc_ff, cjc_po, cjc_sfn, cjc_smk, cjc_sop;
+static int cjc_cap(GLenum c)
+{
+    switch (c) {
+    case GL_BLEND: return 0; case GL_DEPTH_TEST: return 1; case GL_STENCIL_TEST: return 2; case GL_CULL_FACE: return 3;
+    case GL_POLYGON_OFFSET_FILL: return 4; case GL_SCISSOR_TEST: return 5; case GL_DEPTH_CLAMP: return 6;
+    }
+    return -1;
+}
+static void cjc_enable(GLenum c, unsigned on)
+{
+    int i = cjc_cap(c);
+    CjcS *s = i >= 0 ? &cjc_en[i] : (c == GL_CLIP_DISTANCE0 || c == GL_CLIP_DISTANCE1) ? &cjc_clip[c - GL_CLIP_DISTANCE0] : NULL;
+    if (s && cjc_same(s, 1, &on)) return;
+    if (on) glEnable(c); else glDisable(c);
+}
+static void cjc_glEnable(GLenum c) { cjc_enable(c, 1); }
+static void cjc_glDisable(GLenum c) { cjc_enable(c, 0); }
+static void cjc_glBlendFunc(GLenum s, GLenum d) { unsigned k[2] = {s, d}; if (!cjc_same(&cjc_bf, 2, k)) glBlendFunc(s, d); }
+static void cjc_glBlendEquation(GLenum e) { unsigned k = e; if (!cjc_same(&cjc_beq, 1, &k)) glBlendEquation(e); }
+static void cjc_glBlendColor(float r, float g, float b, float a)
+{
+    unsigned k[4]; memcpy(&k[0], &r, 4); memcpy(&k[1], &g, 4); memcpy(&k[2], &b, 4); memcpy(&k[3], &a, 4);
+    if (!cjc_same(&cjc_bcol, 4, k)) glBlendColor(r, g, b, a);
+}
+static void cjc_glDepthFunc(GLenum f) { unsigned k = f; if (!cjc_same(&cjc_df, 1, &k)) glDepthFunc(f); }
+static void cjc_glDepthMask(GLboolean m) { unsigned k = m; if (!cjc_same(&cjc_dm, 1, &k)) glDepthMask(m); }
+static void cjc_glColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a)
+{
+    unsigned k = (unsigned)r | (unsigned)g << 1 | (unsigned)b << 2 | (unsigned)a << 3;
+    if (!cjc_same(&cjc_cmk, 1, &k)) glColorMask(r, g, b, a);
+}
+static void cjc_glCullFace(GLenum f) { unsigned k = f; if (!cjc_same(&cjc_cull, 1, &k)) glCullFace(f); }
+static void cjc_glFrontFace(GLenum f) { unsigned k = f; if (!cjc_same(&cjc_ff, 1, &k)) glFrontFace(f); }
+static void cjc_glPolygonOffset(float f, float u)
+{
+    unsigned k[2]; memcpy(&k[0], &f, 4); memcpy(&k[1], &u, 4);
+    if (!cjc_same(&cjc_po, 2, k)) glPolygonOffset(f, u);
+}
+static void cjc_glStencilFunc(GLenum f, GLint r, GLuint m) { unsigned k[3] = {f, (unsigned)r, m}; if (!cjc_same(&cjc_sfn, 3, k)) glStencilFunc(f, r, m); }
+static void cjc_glStencilMask(GLuint m) { if (!cjc_same(&cjc_smk, 1, &m)) glStencilMask(m); }
+static void cjc_glStencilOp(GLenum a, GLenum b, GLenum c) { unsigned k[3] = {a, b, c}; if (!cjc_same(&cjc_sop, 3, k)) glStencilOp(a, b, c); }
+static CjcS cjc_prog_s, cjc_vao_s, cjc_abuf_s, cjc_actv_s, cjc_tex_s[8];
+static GLuint cjc_prog;
+static void cjc_glUseProgram(GLuint p) { cjc_prog = p; if (!cjc_same(&cjc_prog_s, 1, &p)) { cjc_n_prog++; glUseProgram(p); } }
+static void cjc_glBindVertexArray(GLuint v) { if (!cjc_same(&cjc_vao_s, 1, &v)) { cjc_n_vao++; glBindVertexArray(v); } }
+static void cjc_glBindBuffer(GLenum t, GLuint b)
+{
+    /* (only the array binding is remembered: the element binding belongs to the VAO and BindBufferRange sets the uniform one) */
+    if (t == GL_ARRAY_BUFFER && cjc_same(&cjc_abuf_s, 1, &b)) return;
+    glBindBuffer(t, b);
+}
+static GLenum cjc_actv = GL_TEXTURE0;
+static void cjc_glActiveTexture(GLenum u) { unsigned k = u; cjc_actv = u; if (!cjc_same(&cjc_actv_s, 1, &k)) glActiveTexture(u); }
+static void cjc_glBindTexture(GLenum t, GLuint id)
+{
+    if (t == GL_TEXTURE_2D && cjc_actv >= GL_TEXTURE0 && cjc_actv < GL_TEXTURE0 + 8 && cjc_actv_s.ok) {
+        if (cjc_same(&cjc_tex_s[cjc_actv - GL_TEXTURE0], 1, &id)) return;
+    } else if (t == GL_TEXTURE_2D) {
+        int i; for (i = 0; i < 8; i++) cjc_tex_s[i].ok = 0;
+    }
+    cjc_n_tex++;
+    glBindTexture(t, id);
+}
+/* Sampler state per texture object: apply_sampler set up to nine glTexParameter calls per stage per
+ * draw (each one re-validates the texture in the driver; radeonsi was 17% of the Deck's game thread).
+ * cjc_tp[name] is a hash of what apply_sampler last set on that texture, 0 = unknown; any other
+ * glTexParameter on it, or deleting it, forgets it. */
+#define CJC_TP_MAX 65536u
+static struct { uint64_t k; uint32_t ep; } cjc_tp[CJC_TP_MAX];
+static uint32_t cjc_tp_ep = 1;   /* bumped when a texture we cannot name changes: forgets them all */
+static GLuint cjc_cur_tex(void)
+{
+    unsigned u = cjc_actv - GL_TEXTURE0;
+    if (u < 8 && cjc_actv_s.ok && cjc_tex_s[u].ok) return cjc_tex_s[u].k[0];
+    return 0;
+}
+static void cjc_tp_forget(void) { GLuint id = cjc_cur_tex(); if (id && id < CJC_TP_MAX) cjc_tp[id].k = 0; else cjc_tp_ep++; }
+static void cjc_glTexParameteri(GLenum t, GLenum p, GLint v) { if (t == GL_TEXTURE_2D) cjc_tp_forget(); glTexParameteri(t, p, v); }
+static void cjc_glTexParameterf(GLenum t, GLenum p, GLfloat v) { if (t == GL_TEXTURE_2D) cjc_tp_forget(); glTexParameterf(t, p, v); }
+static void cjc_glTexParameterfv(GLenum t, GLenum p, const GLfloat *v) { if (t == GL_TEXTURE_2D) cjc_tp_forget(); glTexParameterfv(t, p, v); }
+static void cjc_glDeleteTextures(GLsizei n, const GLuint *ids)
+{
+    int i, k;
+    for (i = 0; i < n; i++) for (k = 0; k < 8; k++) if (cjc_tex_s[k].ok && cjc_tex_s[k].k[0] == ids[i]) cjc_tex_s[k].ok = 0;
+    for (i = 0; i < n; i++) if (ids[i] < CJC_TP_MAX) cjc_tp[ids[i]].k = 0;
+    glDeleteTextures(n, ids);
+}
+/* uniforms: the last value per (program, location) */
+typedef struct { GLuint prog; GLint loc; int n; unsigned v[32]; } CjcU;
+static CjcU cjc_u[8192];
+static void cjc_ufree(GLuint prog) { int i; for (i = 0; i < 8192; i++) if (cjc_u[i].prog == prog) cjc_u[i].prog = 0; }
+static void cjc_glLinkProgram(GLuint p) { cjc_ufree(p); glLinkProgram(p); }
+void shc_forget(unsigned prog);
+static void cjc_glDeleteProgram(GLuint p) { cjc_ufree(p); shc_forget(p); glDeleteProgram(p); }
+static int cjc_ustale(GLint loc, const void *v, int nw, int tag)
+{
+    CjcU *e;
+    if (!cjc_f() || loc < 0 || nw > 32 || !cjc_prog) { cjc_pass++; return 1; }
+    e = &cjc_u[(cjc_prog * 40503u + (unsigned)loc * 2654435761u) & 8191u];
+    if (e->prog == cjc_prog && e->loc == loc && e->n == (nw | tag << 8) && !memcmp(e->v, v, (size_t)nw * 4)) { cjc_skip++; return 0; }
+    e->prog = cjc_prog; e->loc = loc; e->n = nw | tag << 8; memcpy(e->v, v, (size_t)nw * 4); cjc_pass++;
+    return 1;
+}
+static void cjc_glUniform1i(GLint l, GLint a) { if (cjc_ustale(l, &a, 1, 1)) glUniform1i(l, a); }
+static void cjc_glUniform1f(GLint l, float a) { if (cjc_ustale(l, &a, 1, 2)) glUniform1f(l, a); }
+static void cjc_glUniform2f(GLint l, float a, float b) { float v[2] = {a, b}; if (cjc_ustale(l, v, 2, 3)) glUniform2f(l, a, b); }
+static void cjc_glUniform2i(GLint l, GLint a, GLint b) { int v[2] = {a, b}; if (cjc_ustale(l, v, 2, 4)) glUniform2i(l, a, b); }
+static void cjc_glUniform3f(GLint l, float a, float b, float c) { float v[3] = {a, b, c}; if (cjc_ustale(l, v, 3, 5)) glUniform3f(l, a, b, c); }
+static void cjc_glUniform4fv(GLint l, GLsizei n, const GLfloat *v) { if (n > 8 || cjc_ustale(l, v, n * 4, 6 + n)) glUniform4fv(l, n, v); }
+#define glEnable cjc_glEnable
+#define glDisable cjc_glDisable
+#define glBlendFunc cjc_glBlendFunc
+#define glBlendEquation cjc_glBlendEquation
+#define glBlendColor cjc_glBlendColor
+#define glDepthFunc cjc_glDepthFunc
+#define glDepthMask cjc_glDepthMask
+#define glColorMask cjc_glColorMask
+#define glCullFace cjc_glCullFace
+#define glFrontFace cjc_glFrontFace
+#define glPolygonOffset cjc_glPolygonOffset
+#define glStencilFunc cjc_glStencilFunc
+#define glStencilMask cjc_glStencilMask
+#define glStencilOp cjc_glStencilOp
+#define glUseProgram cjc_glUseProgram
+#define glBindVertexArray cjc_glBindVertexArray
+#define glBindBuffer cjc_glBindBuffer
+#define glActiveTexture cjc_glActiveTexture
+#define glBindTexture cjc_glBindTexture
+#define glDeleteTextures cjc_glDeleteTextures
+#define glTexParameteri cjc_glTexParameteri
+#define glTexParameterf cjc_glTexParameterf
+#define glTexParameterfv cjc_glTexParameterfv
+#define glLinkProgram cjc_glLinkProgram
+#define glDeleteProgram cjc_glDeleteProgram
+#define glUniform1i cjc_glUniform1i
+#define glUniform1f cjc_glUniform1f
+#define glUniform2f cjc_glUniform2f
+#define glUniform2i cjc_glUniform2i
+#define glUniform3f cjc_glUniform3f
+#define glUniform4fv cjc_glUniform4fv
+
 extern ptrdiff_t xbox_GetMemoryOffset(void);
+void cj_frec_clear(const Nv2aSurface *, const Nv2aRenderState *, uint32_t, uint32_t, uint32_t);   /* frame_rec.c */
+void cj_frec_draw(const Nv2aSurface *, const Nv2aBatch *);
+void cj_frec_flip(void);
+void cj_frec_flip_begin(void);
 
 void gamelog_init(const char *, const char *, const char *);
 void gamelog_frame(uint32_t, uint64_t, uint64_t, const void *);
@@ -64,6 +232,7 @@ static uint32_t s_burst_until;   /* F9 burst: flips below this log their surface
 void gamelog_save_shot(const uint8_t *rgba_bottom_up, int w, int h);
 
 static double s_be_time, s_swap_time, s_upload_time;
+static double s_be_tot, s_swap_tot, s_up_tot, s_to_tot;   /* monotonic: per-frame stage times for frames.csv */
 static uint64_t s_upload_n;            /* seconds inside the back end (draw/clear/flip) since the last [FPS] line */
 static SDL_Window *s_win;
 static SDL_GLContext s_ctx;
@@ -112,7 +281,7 @@ static uint32_t s_flips;
 static uint64_t s_draws, s_tris, s_tex_decodes, s_rtt_binds, s_rc_draws;
 static double s_t0;
 
-typedef struct { uint32_t off, color, w, h, levels; uint64_t hash, shash; GLuint tex; uint64_t used; int next, rm; } TexEnt;
+typedef struct { uint32_t off, color, w, h, levels; uint64_t hash, shash; GLuint tex; uint64_t used; int next, rm; uint64_t pend; } TexEnt;   /* pend: pack key still decoding (src/texpack.c) */
 /* Decoded-texture cache. It was 256 entries with a linear search: a scene
  * binding more distinct textures than that per frame evicted and re-decoded
  * them every frame (thousands of uploads a second, the frame-rate dips in
@@ -160,12 +329,32 @@ volatile CjHostPad cj_host_pad;
 static SDL_GameController *s_pad;
 /* Rumble from the game (src/cj_pad.c, XInputSetState): motor speeds 0..65535. The game sets 0 to stop, so the
  * duration only bounds a lost stop. CJ_RUMBLE=0 turns it off; CJ_RUMBLE=<percent> scales it. */
-/* a timed rumble from the port itself (charge feedback, src/native/hybrid/cjmod_move.c); CJ_RUMBLE=0 mutes it too */
+/* a timed rumble from the port itself (charge feedback, src/native/hybrid/cjmod_move.c); CJ_RUMBLE=0 mutes it too.
+ * The game sends its own motor speeds (often 0, every time it updates the pad), and one SDL rumble replaces the
+ * last: a game "0" right after the charge pulse cut it to nothing, so while a timed rumble lasts the motors run at
+ * the stronger of the two. */
+static uint16_t s_rt_lo, s_rt_hi, s_game_lo, s_game_hi;
+static uint32_t s_rt_until;
+static void rumble_send(void)
+{
+    uint32_t now = SDL_GetTicks();
+    int timed = s_rt_until && (int32_t)(s_rt_until - now) > 0;
+    uint16_t lo = s_game_lo, hi = s_game_hi;
+    uint32_t ms = (lo || hi) ? 5000 : 0;
+    if (timed) {
+        if (s_rt_lo > lo) lo = s_rt_lo;
+        if (s_rt_hi > hi) hi = s_rt_hi;
+        if (!s_game_lo && !s_game_hi) ms = s_rt_until - now;
+    }
+    SDL_GameControllerRumble(s_pad, lo, hi, ms);
+}
 void cj_host_rumble_timed(uint16_t lo, uint16_t hi, uint32_t ms)
 {
     const char *e = getenv("CJ_RUMBLE");
     if (!s_pad || (e && atoi(e) == 0)) return;
-    SDL_GameControllerRumble(s_pad, lo, hi, ms);
+    s_rt_lo = lo; s_rt_hi = hi; s_rt_until = SDL_GetTicks() + ms;
+    if (!s_rt_until) s_rt_until = 1;
+    rumble_send();
 }
 void cj_host_rumble(uint16_t lo, uint16_t hi)
 {
@@ -173,7 +362,9 @@ void cj_host_rumble(uint16_t lo, uint16_t hi)
     if (pct < 0) { const char *e = getenv("CJ_RUMBLE"); pct = e ? atoi(e) : 100; if (pct < 0) pct = 0; if (pct > 200) pct = 200; }
     if (!s_pad || !pct) return;
     unsigned l = (unsigned)lo * (unsigned)pct / 100u, h = (unsigned)hi * (unsigned)pct / 100u;
-    SDL_GameControllerRumble(s_pad, (Uint16)(l > 65535u ? 65535u : l), (Uint16)(h > 65535u ? 65535u : h), (l || h) ? 5000 : 0);
+    s_game_lo = (uint16_t)(l > 65535u ? 65535u : l);
+    s_game_hi = (uint16_t)(h > 65535u ? 65535u : h);
+    rumble_send();
 }
 static int s_fullscreen;
 static int s_win_x, s_win_y, s_win_w, s_win_h;   /* the windowed rectangle, kept while borderless */
@@ -184,8 +375,30 @@ static int s_win_x, s_win_y, s_win_w, s_win_h;   /* the windowed rectangle, kept
  * monitor gets promoted by Windows / the GL driver to direct scanout ("independent flip"), and every
  * overlay (Snipping Tool, Alt+Tab, volume popup) then forces a switch back to composition: a visible
  * flicker, and with HDR on a brightness jump. Off by one pixel, it stays composed and nothing switches. */
+#ifdef _WIN32
+/* Under Wine / Proton a window counts as fullscreen (and goes above the desktop's panel) only when it
+ * exactly matches the screen, so the one-pixel trick is for real Windows only. (main.c) */
+int cj_on_wine(void);
+#endif
 static void set_borderless_fs(SDL_Window *w, int on)
 {
+#ifndef _WIN32
+    /* Linux (Deck desktop mode, any X11/Wayland desktop): the window manager keeps its panel above a
+     * plain borderless window; SDL's desktop fullscreen sets the fullscreen state without a mode change. */
+    if (on) {
+        if (!(SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN_DESKTOP)) {
+            SDL_GetWindowPosition(w, &s_win_x, &s_win_y);
+            SDL_GetWindowSize(w, &s_win_w, &s_win_h);
+        }
+        SDL_SetWindowFullscreen(w, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    } else {
+        SDL_SetWindowFullscreen(w, 0);
+        SDL_SetWindowBordered(w, SDL_TRUE);
+        SDL_SetWindowResizable(w, SDL_TRUE);
+        if (s_win_w > 0) { SDL_SetWindowSize(w, s_win_w, s_win_h); SDL_SetWindowPosition(w, s_win_x, s_win_y); }
+    }
+    return;
+#endif
     if (on) {
         SDL_Rect b;
         int d = SDL_GetWindowDisplayIndex(w);
@@ -197,6 +410,9 @@ static void set_borderless_fs(SDL_Window *w, int on)
         if (SDL_GetDisplayBounds(d, &b) != 0) return;
         SDL_SetWindowResizable(w, SDL_FALSE);
         SDL_SetWindowBordered(w, SDL_FALSE);
+#ifdef _WIN32
+        if (cj_on_wine()) { SDL_SetWindowPosition(w, b.x, b.y); SDL_SetWindowSize(w, b.w, b.h); return; }
+#endif
         SDL_SetWindowPosition(w, b.x, b.y - 1);
         SDL_SetWindowSize(w, b.w, b.h + 1);
     } else {
@@ -204,6 +420,24 @@ static void set_borderless_fs(SDL_Window *w, int on)
         SDL_SetWindowResizable(w, SDL_TRUE);
         if (s_win_w > 0) { SDL_SetWindowSize(w, s_win_w, s_win_h); SDL_SetWindowPosition(w, s_win_x, s_win_y); }
     }
+}
+/* V-Sync to a display whose refresh is not a multiple of 60 (Steam Deck OLED at 90 Hz, 144 Hz monitors)
+ * puts each 16.7 ms frame on an 11.1 ms (6.9 ms) grid: alternating 1 and 2 refreshes, and every late
+ * frame waits two (90 / 2 = 45 fps: the Deck's title screen at ~43). Under gamescope (Steam Deck Game
+ * Mode, which composites and paces itself, no tearing) V-Sync is left off in that case; the frame pacer
+ * keeps the 60. */
+static int vsync_interval(SDL_Window *w)
+{
+    int want = pcs_get(PCS_VSYNC);
+    static int logged;
+    SDL_DisplayMode m;
+    const char *gs = getenv("GAMESCOPE_WAYLAND_DISPLAY"), *deck = getenv("SteamDeck");
+    if (want && ((gs && *gs) || (deck && *deck == '1')) && SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(w) < 0 ? 0 : SDL_GetWindowDisplayIndex(w), &m) == 0
+        && m.refresh_rate > 0 && m.refresh_rate % 60 != 0) {
+        if (!logged++) fprintf(stderr, "[GL] V-Sync off: %d Hz is not a multiple of 60 and gamescope paces the frames\n", m.refresh_rate);
+        return 0;
+    }
+    return want;
 }
 static double s_fps_t; static uint32_t s_fps_f;
 
@@ -320,9 +554,21 @@ typedef struct {
 /* vsh: index into s_vsh (a translated vertex program) or -1 for the fixed
  * screen-space VS; legacy: stage 0 x diffuse instead of the combiners. */
 typedef struct { RcKey key; int vsh, legacy; Prog p; int used; } ProgEnt;
-#define NPROG 512
+#define NPROG 4096
 static ProgEnt s_progs[NPROG];
 static int s_nprog;
+static int s_phash[NPROG * 2];   /* key hash -> index + 1 (open addressing) */
+
+static uint32_t prog_key_hash(const RcKey *k, int vsh, int legacy)
+{
+    const unsigned char *p = (const unsigned char *)k;
+    uint32_t h = 2166136261u;
+    size_t i;
+    for (i = 0; i < sizeof *k; i++) { h ^= p[i]; h *= 16777619u; }
+    h ^= (uint32_t)vsh * 0x9E3779B1u; h *= 16777619u;
+    h ^= (uint32_t)legacy; h *= 16777619u;
+    return h;
+}
 static Prog s_legacy, *s_cur;
 
 static GLuint sh(GLenum t, const char *src)
@@ -342,6 +588,119 @@ static GLuint sh(GLenum t, const char *src)
 
 static GLuint s_vs;
 
+/* ---------- Shader list (Compile Shaders in the launcher) ----------
+ * The list is every combiner program the game builds, as source: a vertex shader and a fragment
+ * shader per entry. Our generator's output does not depend on the driver, so one list, collected
+ * by playing every level with CJ_GL_SHADER_RECORD=<file>, serves every PC. With
+ * CJ_GL_SHADER_PREWARM=<file> the game compiles and links the whole list into the shader cache
+ * (src/shader_cache.c) right after the window opens, writes its progress to
+ * <cache dir>/compile-progress.txt ("done total") and exits: the launcher's Compile Shaders.
+ * File: "PCJSHL1\n", then per entry "P <vs bytes> <fs bytes>\n" + vs + fs. */
+#define SHL_MAGIC "PCJSHL1\n"
+static FILE *s_shl;
+static uint64_t *s_shl_seen; static size_t s_shl_n, s_shl_cap;
+static int shl_seen(uint64_t k)
+{
+    size_t i;
+    for (i = 0; i < s_shl_n; i++) if (s_shl_seen[i] == k) return 1;
+    if (s_shl_n == s_shl_cap) {
+        s_shl_cap = s_shl_cap ? s_shl_cap * 2 : 256;
+        s_shl_seen = (uint64_t *)realloc(s_shl_seen, s_shl_cap * sizeof *s_shl_seen);
+        if (!s_shl_seen) { s_shl_n = s_shl_cap = 0; return 1; }
+    }
+    s_shl_seen[s_shl_n++] = k;
+    return 0;
+}
+/* one list entry: 1, 0 at the end, -1 on a damaged file */
+static int shl_next(FILE *f, char **vs, char **fs)
+{
+    unsigned long a, b;
+    *vs = *fs = NULL;
+    if (fscanf(f, "P %lu %lu", &a, &b) != 2) return feof(f) ? 0 : -1;
+    if (fgetc(f) != '\n' || a > (1u << 20) || b > (1u << 20)) return -1;
+    *vs = (char *)malloc(a + 1); *fs = (char *)malloc(b + 1);
+    if (!*vs || !*fs || fread(*vs, 1, a, f) != a || fread(*fs, 1, b, f) != b) { free(*vs); free(*fs); *vs = *fs = NULL; return -1; }
+    (*vs)[a] = 0; (*fs)[b] = 0;
+    return 1;
+}
+static void shader_record(uint64_t key, const char *vs, const char *fs)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *path = getenv("CJ_GL_SHADER_RECORD");
+        on = 0;
+        if (path && *path) {
+            FILE *r = fopen(path, "rb");
+            char m[8];
+            if (r) {   /* carry on an existing list: remember what it holds */
+                char *a, *b;
+                if (fread(m, 1, 8, r) == 8 && !memcmp(m, SHL_MAGIC, 8))
+                    while (shl_next(r, &a, &b) == 1) { shl_seen(shc_hash(a, b)); free(a); free(b); }
+                fclose(r);
+            }
+            s_shl = fopen(path, "ab");
+            if (s_shl) {
+                if (ftell(s_shl) == 0) fwrite(SHL_MAGIC, 1, 8, s_shl);
+                on = 1;
+                fprintf(stderr, "[GL] recording the shader list to %s (%zu already in it)\n", path, s_shl_n);
+            }
+        }
+    }
+    if (!on || shl_seen(key)) return;
+    fprintf(s_shl, "P %lu %lu\n", (unsigned long)strlen(vs), (unsigned long)strlen(fs));
+    fwrite(vs, 1, strlen(vs), s_shl);
+    fwrite(fs, 1, strlen(fs), s_shl);
+    fflush(s_shl);
+}
+static void shader_prewarm(void)
+{
+    const char *path = getenv("CJ_GL_SHADER_PREWARM"), *dir = getenv("CJ_GL_SHADER_CACHE_DIR");
+    char prog_path[1024], m[8], *vs, *fs;
+    FILE *f, *pf;
+    long total = 0, done = 0, built = 0, failed = 0, r;
+    double t0 = now_s();
+    if (!path || !*path) return;
+    snprintf(prog_path, sizeof prog_path, "%s/compile-progress.txt", dir && *dir ? dir : "shadercache");
+    if (!(f = fopen(path, "rb")) || fread(m, 1, 8, f) != 8 || memcmp(m, SHL_MAGIC, 8)) {
+        fprintf(stderr, "[SHADERS] cannot read the shader list %s\n", path);
+        if ((pf = fopen(prog_path, "w"))) { fprintf(pf, "fail\n"); fclose(pf); }
+        exit(2);
+    }
+    while ((r = shl_next(f, &vs, &fs)) == 1) { total++; free(vs); free(fs); }
+    fseek(f, 8, SEEK_SET);
+    fprintf(stderr, "[SHADERS] compiling %ld programs into the shader cache\n", total);
+    while ((r = shl_next(f, &vs, &fs)) == 1) {
+        uint64_t key = shc_hash(vs, fs);
+        GLuint p = glCreateProgram();
+        if (!shc_load(key, p)) {
+            GLint ok = 0;
+            GLuint v = sh(GL_VERTEX_SHADER, vs), fr = sh(GL_FRAGMENT_SHADER, fs);
+            glAttachShader(p, v); glAttachShader(p, fr);
+            shc_prepare(p);
+            glLinkProgram(p);
+            glDetachShader(p, v); glDetachShader(p, fr);
+            glDeleteShader(v); glDeleteShader(fr);
+            glGetProgramiv(p, GL_LINK_STATUS, &ok);
+            if (ok) { shc_store(key, p); built++; } else failed++;
+        }
+        if (strcmp(vs, VS)) shc_vs_note(shc_hash(vs, "vsh"));   /* the game then skips compiling it */
+        glDeleteProgram(p);
+        free(vs); free(fs);
+        done++;
+        if (done % 8 == 0 || done == total) {
+            if ((pf = fopen(prog_path, "w"))) { fprintf(pf, "%ld %ld\n", done, total); fclose(pf); }
+            SDL_PumpEvents();
+        }
+    }
+    fclose(f);
+    fprintf(stderr, "[SHADERS] done: %ld programs, %ld compiled now, %ld already cached, %ld failed, %.1f s%s\n",
+            done, built, done - built - failed, failed, now_s() - t0, r < 0 ? " (the list ends early: damaged)" : "");
+    if ((pf = fopen(prog_path, "w"))) { fprintf(pf, "done %ld %ld\n", done, total); fclose(pf); }
+    exit(r < 0 ? 3 : 0);
+}
+
+static void prog_setup(Prog *p);
+
 static int link_prog(Prog *p, GLuint vs, const char *fs)
 {
     GLint ok;
@@ -359,6 +718,48 @@ static int link_prog(Prog *p, GLuint vs, const char *fs)
         fprintf(stderr, "[GL] link: %s\n", log);
         return 0;
     }
+    prog_setup(p);
+    return 1;
+}
+
+static GLuint vsh_shader(int id);
+static const char *vsh_source(int id);
+
+/* A combiner program: from the shader cache when this driver linked it before
+ * (src/shader_cache.c), else compiled + linked and stored. */
+static void shader_record(uint64_t key, const char *vs, const char *fs);
+static int link_prog_c(Prog *p, int vsh, const char *fs)
+{
+    uint64_t key = shc_hash(vsh >= 0 ? vsh_source(vsh) : VS, fs);
+    shader_record(key, vsh >= 0 ? vsh_source(vsh) : VS, fs);
+    memset(p, 0, sizeof *p);
+    p->prog = glCreateProgram();
+    if (!shc_load(key, p->prog)) {
+        GLint ok;
+        GLuint v = vsh >= 0 ? vsh_shader(vsh) : s_vs, f = sh(GL_FRAGMENT_SHADER, fs);
+        glAttachShader(p->prog, v);
+        glAttachShader(p->prog, f);
+        shc_prepare(p->prog);
+        glLinkProgram(p->prog);
+        glDetachShader(p->prog, v);
+        glDetachShader(p->prog, f);
+        glDeleteShader(f);
+        glGetProgramiv(p->prog, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            char log[2048];
+            glGetProgramInfoLog(p->prog, sizeof log, NULL, log);
+            fprintf(stderr, "[GL] link: %s\n", log);
+            return 0;
+        }
+        shc_store_later(key, p->prog);
+    }
+    prog_setup(p);
+    return 1;
+}
+
+static void prog_setup(Prog *p)
+{
+    GLint ok;
 #define U(n) p->n = glGetUniformLocation(p->prog, #n)
     U(u_size); U(u_zscale); U(u_wbuf); U(u_diag); U(u_dq); U(u_po); U(u_tx); U(u_tn); U(u_aone); U(u_twh); U(u_textured);
     U(u_alpha_on); U(u_alpha_func); U(u_alpha_ref); U(u_c0); U(u_c1); U(u_fc0); U(u_fc1); U(u_fogc);
@@ -377,7 +778,6 @@ static int link_prog(Prog *p, GLuint vs, const char *fs)
     glUseProgram(p->prog);
     for (ok = 0; ok < 4; ok++)
         glUniform1i(p->u_t[ok], ok);
-    return 1;
 }
 
 /* ---- register combiners -> GLSL (rules: toolkit nv2a_combiner.c) ------- */
@@ -585,19 +985,26 @@ static Prog *prog_for(const Nv2aBatch *b, int vsh, int legacy)
         if (mode != 5) k.clip_plane_mode &= ~(0xFu << (st * 4));
     }
 keyed:
-    for (i = 0; i < s_nprog; i++)
-        if (s_progs[i].vsh == vsh && s_progs[i].legacy == legacy
-            && !memcmp(&s_progs[i].key, &k, sizeof k)) {
-            s_progs[i].used = (int)s_tick;
-            return &s_progs[i].p;
+    {   /* every program stays for the session (the old 512-entry LRU deleted programs and
+         * recompiled them mid-game); a full table (never seen) starts over */
+        uint32_t h = prog_key_hash(&k, vsh, legacy), j;
+        for (j = h & (NPROG * 2 - 1); s_phash[j]; j = (j + 1) & (NPROG * 2 - 1)) {
+            ProgEnt *c = &s_progs[s_phash[j] - 1];
+            if (c->vsh == vsh && c->legacy == legacy && !memcmp(&c->key, &k, sizeof k)) {
+                c->used = (int)s_tick;
+                return &c->p;
+            }
         }
-    if (s_nprog < NPROG)
+        if (s_nprog == NPROG) {
+            for (i = 0; i < NPROG; i++) glDeleteProgram(s_progs[i].p.prog);
+            memset(s_phash, 0, sizeof s_phash);
+            s_nprog = 0;
+            fprintf(stderr, "[GL] program table full: cleared\n");
+            for (j = h & (NPROG * 2 - 1); s_phash[j]; j = (j + 1) & (NPROG * 2 - 1)) {}
+        }
         e = &s_progs[s_nprog++];
-    else {
-        for (i = 1; i < NPROG; i++)
-            if (s_progs[i].used < s_progs[lru].used) lru = i;
-        e = &s_progs[lru];
-        glDeleteProgram(e->p.prog);
+        s_phash[j] = s_nprog;
+        (void)lru;
     }
     e->key = k;
     e->vsh = vsh;
@@ -607,7 +1014,7 @@ keyed:
         size_t n = strlen(FS_HEAD) + strlen(FS_LEGACY_BODY) + 1;
         fs = malloc(n);
         snprintf(fs, n, "%s%s", FS_HEAD, FS_LEGACY_BODY);
-        link_prog(&e->p, vsh_shader(vsh), fs);
+        link_prog_c(&e->p, vsh, fs);
         free(fs);
         return &e->p;
     }
@@ -618,7 +1025,7 @@ keyed:
     else
         fprintf(stderr, "[GL] combiner program %d: ctl %08X stage prog %05X valid %X final %08X/%08X\n",
                 s_nprog, k.control, k.stage_program, k.valid, k.final0, k.final1);
-    link_prog(&e->p, vsh >= 0 ? vsh_shader(vsh) : s_vs, fs);
+    link_prog_c(&e->p, vsh, fs);
     free(fs);
     return &e->p;
 }
@@ -645,6 +1052,8 @@ typedef struct {
     uint64_t hash;
     GLuint vs;
     int ok;
+    char *src;          /* kept: the shader cache keys programs by source */
+    uint64_t src_hash;
 } VshEnt;
 #define NVSH 1024
 static VshEnt s_vsh[NVSH];
@@ -831,7 +1240,28 @@ static char *gen_vs(const uint32_t (*w)[4], uint32_t n, uint32_t *inputs, uint32
     return o.b;
 }
 
-static GLuint vsh_shader(int id) { return s_vsh[id].vs; }
+static const char *vsh_source(int id) { return s_vsh[id].src; }
+
+/* The GL shader for vertex program id, compiled on first use: when the shader cache
+ * knows this source compiled before, compiling waits until a program must be linked. */
+static GLuint vsh_shader(int id)
+{
+    VshEnt *e = &s_vsh[id];
+    if (!e->vs) {
+        GLint ok = 0;
+        e->vs = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(e->vs, 1, (const char *const *)&e->src, NULL);
+        glCompileShader(e->vs);
+        glGetShaderiv(e->vs, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[2048];
+            glGetShaderInfoLog(e->vs, sizeof log, NULL, log);
+            fprintf(stderr, "[GL] vsh %d: compile failed: %s\n", id, log);
+            e->ok = 0;
+        }
+    }
+    return e->vs;
+}
 
 static uint64_t vsh_hash(const uint32_t (*w)[4], uint32_t n)
 {
@@ -875,10 +1305,18 @@ static int gl_vsh_accept(const uint32_t (*w)[4], uint32_t n, uint32_t cxt_write,
             e->w = malloc(n * 16);
             memcpy(e->w, w, n * 16);
             src = gen_vs(w, n, &e->inputs, &e->writes_c);
-            e->vs = glCreateShader(GL_VERTEX_SHADER);
-            glShaderSource(e->vs, 1, (const char *const *)&src, NULL);
-            glCompileShader(e->vs);
-            glGetShaderiv(e->vs, GL_COMPILE_STATUS, &ok);
+            e->src = src;
+            e->src_hash = shc_hash(src, "vsh");
+            e->vs = 0;
+            if (shc_vs_known(e->src_hash))
+                ok = 1;   /* compiled on this driver before (shader cache): compile only if a link needs it */
+            else {
+                e->vs = glCreateShader(GL_VERTEX_SHADER);
+                glShaderSource(e->vs, 1, (const char *const *)&src, NULL);
+                glCompileShader(e->vs);
+                glGetShaderiv(e->vs, GL_COMPILE_STATUS, &ok);
+                if (ok) shc_vs_note(e->src_hash);
+            }
             e->ok = ok;
             if (!ok) {
                 char log[2048];
@@ -887,9 +1325,8 @@ static int gl_vsh_accept(const uint32_t (*w)[4], uint32_t n, uint32_t cxt_write,
             } else if (getenv("CJ_GL_SHADER_LOG"))
                 fprintf(stderr, "[GL] vsh %d (%u instructions, inputs %04X)\n%s\n", s_nvsh - 1, n, e->inputs, src);
             else
-                fprintf(stderr, "[GL] vsh %d: %u instructions, inputs %04X%s\n", s_nvsh - 1, n, e->inputs,
-                        e->writes_c ? ", writes c[]" : "");
-            free(src);
+                fprintf(stderr, "[GL] vsh %d: %u instructions, inputs %04X%s%s\n", s_nvsh - 1, n, e->inputs,
+                        e->writes_c ? ", writes c[]" : "", e->vs ? "" : " (cached)");
         }
         s_vcur = (int)(e - s_vsh);
     }
@@ -901,6 +1338,225 @@ static int gl_vsh_accept(const uint32_t (*w)[4], uint32_t n, uint32_t cxt_write,
     *inputs = e->inputs;
     s_vsh_batches++;
     return s_ab ? 2 : 1;
+}
+
+/* Streaming rings (CJ_GL_RING=0: the old per-draw glBufferData). One large buffer each for vertices,
+ * indices and constants, written with unsynchronised maps and orphaned only when full: per-draw
+ * glBufferData reallocation is the slow path on AMD's GL driver, at ~1,500 draws a frame. */
+#define RING_V (48u << 20)
+#define RING_E (16u << 20)
+#define RING_U (4u << 20)
+#define RING_UP (32u << 20)   /* constants, persistent: ~1,000 3 KB updates a frame, so a quarter holds several frames */
+static int s_gring = -1;
+static size_t s_rv, s_re, s_ru;
+static GLint s_ualign = 256;
+static uint64_t s_ring_wraps;
+/* Persistent rings (CJ_GL_PERSIST=0: off; needs GL 4.4 or ARB_buffer_storage). The mapped rings
+ * above cost two glMapBufferRange/glUnmapBuffer pairs per draw (~3,100 a frame); under Mesa's
+ * glthread each map makes the game thread wait for the driver thread. Here each ring is mapped once
+ * (persistent, coherent) and written with memcpy. A ring is four quarters; leaving a quarter fences
+ * it, entering one waits for its fence, so nothing the GPU may still read is overwritten. */
+typedef struct { GLenum target; size_t cap; uint8_t *map; int q; GLsync f[4]; } PRing;
+static PRing s_pr[3];   /* 0 vertices, 1 indices, 2 constants */
+static int s_pers;      /* persistent rings in use */
+static int s_pers_off;  /* given up on them (a draw too big for a ring) */
+static int s_vao2_epoch;   /* bumped when s_vbo2 is replaced: vsh_draw's attribute cache starts over */
+static uint64_t s_pers_waits;
+static PRing *pring(GLenum target) { return target == GL_ARRAY_BUFFER ? &s_pr[0] : target == GL_ELEMENT_ARRAY_BUFFER ? &s_pr[1] : &s_pr[2]; }
+static void pring_enter(PRing *r, size_t end)   /* about to write up to `end` (exclusive) */
+{
+    size_t qs = r->cap / 4;
+    int qe = (int)((end - 1) / qs);
+    while (r->q != qe) {
+        if (r->f[r->q]) glDeleteSync(r->f[r->q]);
+        r->f[r->q] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        r->q = (r->q + 1) & 3;
+        if (r->f[r->q]) {
+            if (glClientWaitSync(r->f[r->q], 0, 0) == GL_TIMEOUT_EXPIRED) {
+                s_pers_waits++;
+                glClientWaitSync(r->f[r->q], GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull);
+            }
+            glDeleteSync(r->f[r->q]); r->f[r->q] = 0;
+        }
+    }
+}
+static size_t ring_put(GLenum target, size_t *pos, size_t cap, const void *data, size_t n, size_t align)
+{
+    size_t p = (*pos + align - 1) / align * align;
+    void *m;
+    if (s_pers) {
+        PRing *r = pring(target);
+        if (n == 0 || n > r->cap / 4) return (size_t)-1;   /* a write never spans more than two quarters */
+        if (p + n > r->cap) { p = 0; s_ring_wraps++; }
+        pring_enter(r, p + n);
+        memcpy(r->map + p, data, n);
+        *pos = p + n;
+        return p;
+    }
+    if (n > cap) return (size_t)-1;
+    if (p + n > cap) { glBufferData(target, (GLsizeiptr)cap, NULL, GL_STREAM_DRAW); p = 0; s_ring_wraps++; }
+    m = glMapBufferRange(target, (GLintptr)p, (GLsizeiptr)n, GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
+    if (!m) return (size_t)-1;
+    memcpy(m, data, n);
+    glUnmapBuffer(target);
+    *pos = p + n;
+    return p;
+}
+static int pring_make(int i, GLenum target, GLuint buf, size_t cap)
+{
+    const GLbitfield fl = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+    PRing *r = &s_pr[i];
+    memset(r, 0, sizeof *r);
+    r->target = target; r->cap = cap;
+    glBindBuffer(target, buf);
+    glBufferStorage(target, (GLsizeiptr)cap, NULL, fl);
+    r->map = glMapBufferRange(target, 0, (GLsizeiptr)cap, fl);
+    return r->map != NULL;
+}
+void cj_gl_filter_stats(void) { fprintf(stderr, "[GLFILTER] calls passed %llu, skipped %llu\n", cjc_pass, cjc_skip);
+    fprintf(stderr, "[GL] persistent rings %s, waits on the GPU %llu, wraps %llu\n", s_pers ? "on" : "off", (unsigned long long)s_pers_waits, (unsigned long long)s_ring_wraps); }
+static void ring_init(void);
+/* replace the three ring buffers with fresh (mutable) ones: storage set by glBufferStorage is for life */
+static void pring_drop(void)
+{
+    int i;
+    for (i = 0; i < 3; i++) {
+        int k; for (k = 0; k < 4; k++) if (s_pr[i].f[k]) glDeleteSync(s_pr[i].f[k]);
+        memset(&s_pr[i], 0, sizeof s_pr[i]);
+    }
+    glDeleteBuffers(1, &s_vbo2); glDeleteBuffers(1, &s_ebo); glDeleteBuffers(1, &s_ubo);
+    glGenBuffers(1, &s_vbo2); glGenBuffers(1, &s_ebo); glGenBuffers(1, &s_ubo);
+    cjc_abuf_s.ok = 0;
+    glBindVertexArray(s_vao2);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_ebo);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
+    s_vao2_epoch++;
+    s_pers = 0; s_pers_off = 1;
+}
+static void ring_init(void)
+{
+    const char *e = getenv("CJ_GL_RING");
+    s_gring = !(e && *e == '0');
+    if (!s_gring) return;
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &s_ualign);
+    if (s_ualign < 16) s_ualign = 16;
+    s_rv = s_re = s_ru = 0;
+    s_cvalid = 0;   /* the constants buffer was reallocated */
+    e = getenv("CJ_GL_PERSIST");
+    if (!s_pers_off && !(e && *e == '0') && (epoxy_gl_version() >= 44 || epoxy_has_gl_extension("GL_ARB_buffer_storage"))) {
+        int ok;
+        glBindVertexArray(s_vao2);
+        ok = pring_make(0, GL_ARRAY_BUFFER, s_vbo2, RING_V) && pring_make(1, GL_ELEMENT_ARRAY_BUFFER, s_ebo, RING_E) &&
+             pring_make(2, GL_UNIFORM_BUFFER, s_ubo, RING_UP);
+        if (ok) {
+            s_pers = 1;
+            fprintf(stderr, "[GL] streaming rings persistent-mapped (vertices %u MB, indices %u MB, constants %u MB; CJ_GL_PERSIST=0: per-draw maps)\n",
+                    RING_V >> 20, RING_E >> 20, RING_UP >> 20);
+            return;
+        }
+        fprintf(stderr, "[GL] persistent rings unavailable (map failed): per-draw maps\n");
+        pring_drop();
+    }
+    glBindVertexArray(s_vao2);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo2); glBufferData(GL_ARRAY_BUFFER, RING_V, NULL, GL_STREAM_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, RING_E, NULL, GL_STREAM_DRAW);
+    glBindBuffer(GL_UNIFORM_BUFFER, s_ubo); glBufferData(GL_UNIFORM_BUFFER, RING_U, NULL, GL_STREAM_DRAW);
+    fprintf(stderr, "[GL] streaming rings on (vertices %u MB, indices %u MB, constants %u MB, uniform alignment %d)\n",
+            RING_V >> 20, RING_E >> 20, RING_U >> 20, s_ualign);
+}
+
+/* A raw batch (Nv2aVshBatch.raw): each stream of guest vertex bytes goes up as it is, bound to its own
+ * vertex buffer binding (GL 4.3 / ARB_vertex_attrib_binding), and each input reads its stream in the
+ * guest's format, so the GPU does the conversion the executor used to do per vertex on the CPU.
+ * Its own VAO (s_vao3): the float-row path's cached attribute setup in s_vao2 stays as it was.
+ * 0: not drawn (no attribute binding, or no ring): the caller cannot fall back (verts were not
+ * fetched), so the executor is told to stop making raw batches (cj_gl_raw_ok). */
+static GLuint s_vao3;
+static int s_vab = -1;
+static float s_gcv[16][4]; static unsigned short s_gcvok;   /* generic values of disabled inputs (context state, both paths) */
+/* The executor's question before it makes raw batches (nv2a_raw_vertex_ok): attribute binding is there. */
+static int raw_vertex_ok(void)
+{
+    if (s_vab < 0) s_vab = epoxy_gl_version() >= 43 || epoxy_has_gl_extension("GL_ARB_vertex_attrib_binding");
+    return s_vab;
+}
+/* for the executor: no until the first raw draw has looked (no GL context before that is fine:
+ * a raw batch the back end cannot bind is converted here, cj_raw_rows) */
+static int raw_vertex_known_ok(void) { return s_vab != 0; }
+/* A raw batch as the float4 rows the executor would have made (a batch too big for the rings, and
+ * frame recordings) */
+void cj_raw_rows(const Nv2aVshBatch *v, float *out)
+{
+    uint32_t cols = 0, j, c, q;
+    for (c = 0; c < 16; c++) if (v->array_mask & (1u << c)) cols++;
+    for (j = 0; j < v->nverts; j++)
+        for (c = 0; c < cols; c++, out += 4) {
+            const uint8_t *e = v->raw_sptr[v->raw_col_stream[c]] + (size_t)j * v->raw_sstride[v->raw_col_stream[c]] + v->raw_off[c];
+            uint32_t nz = v->raw_size[c] < 4 ? v->raw_size[c] : 4;
+            out[0] = out[1] = out[2] = 0.0f; out[3] = 1.0f;
+            switch (v->raw_type[c]) {
+            case 0: out[0] = e[2] / 255.0f; out[1] = e[1] / 255.0f; out[2] = e[0] / 255.0f; out[3] = e[3] / 255.0f; break;
+            case 1: for (q = 0; q < nz; q++) { int16_t x; memcpy(&x, e + 2 * q, 2); out[q] = (float)x / 32767.0f; } break;
+            case 2: memcpy(out, e, 4 * nz); break;
+            case 4: for (q = 0; q < nz; q++) out[q] = e[q] / 255.0f; break;
+            case 5: for (q = 0; q < nz; q++) { int16_t x; memcpy(&x, e + 2 * q, 2); out[q] = (float)x; } break;
+            default: break;
+            }
+        }
+}
+static int vsh_draw_raw(const Nv2aBatch *b)
+{
+    const Nv2aVshBatch *v = b->vsh;
+    static signed char ae[16] = {-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+    static uint32_t afmt[16], aoff[16], abind[16];
+    static int ep_seen = -1;
+    size_t sp[4], ep;
+    uint32_t k, col = 0, s;
+    if (!raw_vertex_ok() || s_gring <= 0) return 0;
+    if (!s_vao3 || ep_seen != s_vao2_epoch) {   /* (again after pring_drop replaced the buffers) */
+        if (!s_vao3) glGenVertexArrays(1, &s_vao3);
+        glBindVertexArray(s_vao3);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_ebo);
+        ep_seen = s_vao2_epoch;
+        memset(afmt, 0, sizeof afmt);
+    }
+    glBindVertexArray(s_vao3);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo2);
+    for (s = 0; s < v->raw_nstreams; s++)
+        if ((sp[s] = ring_put(GL_ARRAY_BUFFER, &s_rv, RING_V, v->raw_sptr[s], v->raw_sbytes[s], 16)) == (size_t)-1) return 0;
+    if ((ep = ring_put(GL_ELEMENT_ARRAY_BUFFER, &s_re, RING_E, v->indices, (size_t)b->count * 4, 4)) == (size_t)-1) return 0;
+    for (s = 0; s < v->raw_nstreams; s++) glBindVertexBuffer(s, s_vbo2, (GLintptr)sp[s], (GLsizei)v->raw_sstride[s]);
+    for (k = 0; k < 16; k++) {
+        if (v->array_mask & (1u << k)) {
+            uint32_t fmt = 0x100u | (uint32_t)v->raw_type[col] << 4 | v->raw_size[col], o = v->raw_off[col], bi = v->raw_col_stream[col];
+            if (ae[k] != 1) { glEnableVertexAttribArray(k); ae[k] = 1; }
+            if (afmt[k] != fmt || aoff[k] != o) {
+                GLint sz = v->raw_size[col];
+                GLenum ty = GL_FLOAT; GLboolean nm = GL_FALSE;
+                switch (v->raw_type[col]) {   /* as fetch_attr: D3DCOLOR BGRA bytes /255, ubyte /255, short /32767 or as is, float */
+                case 0: sz = GL_BGRA; ty = GL_UNSIGNED_BYTE; nm = GL_TRUE; break;
+                case 1: ty = GL_SHORT; nm = GL_TRUE; break;
+                case 4: ty = GL_UNSIGNED_BYTE; nm = GL_TRUE; break;
+                case 5: ty = GL_SHORT; break;
+                default: break;
+                }
+                glVertexAttribFormat(k, sz, ty, nm, o);
+                afmt[k] = fmt; aoff[k] = o;
+            }
+            if (abind[k] != bi + 1) { glVertexAttribBinding(k, bi); abind[k] = bi + 1; }
+            col++;
+        } else {
+            if (ae[k] != 0) { glDisableVertexAttribArray(k); ae[k] = 0; }
+            if (!(s_gcvok & (1u << k)) || memcmp(s_gcv[k], v->inputs[k], 16)) {
+                glVertexAttrib4fv(k, v->inputs[k]); memcpy(s_gcv[k], v->inputs[k], 16); s_gcvok |= (unsigned short)(1u << k);
+            }
+        }
+    }
+    glEnable(GL_DEPTH_CLAMP);
+    glEnable(GL_CLIP_DISTANCE0);
+    glEnable(GL_CLIP_DISTANCE1);
+    if (!s_nodraw) { cjc_n_draw++; glDrawElements(GL_TRIANGLES, (GLsizei)b->count, GL_UNSIGNED_INT, (void *)(uintptr_t)ep); }
+    return 1;
 }
 
 /* The vertex half of a GPU-VS draw: inputs, constants, indices, clip state. */
@@ -915,34 +1571,77 @@ static void vsh_draw(const Nv2aBatch *b)
     glUniform1f(s_cur->u_clipz, v->clip_z);
     glUniform2i(s_cur->u_fogm, (int)v->fog_enable, (int)v->fog_mode);
     glUniform2f(s_cur->u_fogp, v->fog_param[0], v->fog_param[1]);
+    size_t vp = 0, ep = 0, vbytes = (size_t)v->nverts * (na ? na : 1) * 16, ebytes = (size_t)b->count * 4;
+    size_t stride = (size_t)(na ? na : 1) * 16;
+    const void *vsrc = v->verts;
+    GLint basev = 0;
+    if (s_gring < 0) ring_init();
     if (!s_cvalid || memcmp(s_cshadow, v->constants, sizeof s_cshadow)) {
         memcpy(s_cshadow, v->constants, sizeof s_cshadow);
         s_cvalid = 1;
         glBindBuffer(GL_UNIFORM_BUFFER, s_ubo);
-        glBufferData(GL_UNIFORM_BUFFER, sizeof s_cshadow, s_cshadow, GL_STREAM_DRAW);
+        if (s_gring) {
+            size_t up = ring_put(GL_UNIFORM_BUFFER, &s_ru, RING_U, s_cshadow, sizeof s_cshadow, (size_t)s_ualign);
+            if (up != (size_t)-1) glBindBufferRange(GL_UNIFORM_BUFFER, 0, s_ubo, (GLintptr)up, sizeof s_cshadow);
+        } else
+            glBufferData(GL_UNIFORM_BUFFER, sizeof s_cshadow, s_cshadow, GL_STREAM_DRAW);
+    }
+    if (v->raw && na) {
+        static float *rows; static size_t cap;
+        size_t need;
+        if (vsh_draw_raw(b)) return;
+        need = (size_t)v->nverts * na * 4;   /* not drawable raw (too big for the rings): as float rows */
+        if (need > cap) { float *nr = realloc(rows, need * sizeof *rows); if (!nr) return; rows = nr; cap = need; }
+        cj_raw_rows(v, rows);
+        vsrc = rows;
     }
     glBindVertexArray(s_vao2);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo2);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)v->nverts * (na ? na : 1) * 16, v->verts, GL_STREAM_DRAW);
-    for (k = 0; k < 16; k++) {
-        if (v->array_mask & (1u << k)) {
-            glEnableVertexAttribArray(k);
-            glVertexAttribPointer(k, 4, GL_FLOAT, GL_FALSE, (GLsizei)(na * 16), (void *)(uintptr_t)off);
-            off += 16;
-        } else {
-            glDisableVertexAttribArray(k);
-            glVertexAttrib4fv(k, v->inputs[k]);
+    if (s_gring && (vp = ring_put(GL_ARRAY_BUFFER, &s_rv, RING_V, vsrc, vbytes, stride)) != (size_t)-1 &&
+        (ep = ring_put(GL_ELEMENT_ARRAY_BUFFER, &s_re, RING_E, v->indices, ebytes, 4)) != (size_t)-1) {
+        basev = (GLint)(vp / stride);   /* the vertices start at a whole number of strides: the pointers stay put and the draw offsets the indices */
+    } else {
+        vp = ep = 0; off = 0;
+        if (s_gring && s_pers) {   /* storage from glBufferStorage cannot be re-specified: fresh buffers, per-draw maps from now on */
+            fprintf(stderr, "[GL] a draw too big for the persistent rings (%zu vertex bytes): back to per-draw maps\n", vbytes);
+            pring_drop();
+            glBindBuffer(GL_ARRAY_BUFFER, s_vbo2);
+        }
+        if (s_gring) {   /* too big for the ring: whole buffers this once, then the rings start over */
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vbytes, vsrc, GL_STREAM_DRAW);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ebytes, v->indices, GL_STREAM_DRAW);
+            s_gring = -1;
+        } else
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vbytes, vsrc, GL_STREAM_DRAW);
+    }
+    {   /* s_vao2's attribute setup, and the generic values of the unused ones, only where they change */
+        static signed char ae[16] = {-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+        static uint32_t as[16], ao[16];
+        static int ep_seen;
+        if (ep_seen != s_vao2_epoch) { ep_seen = s_vao2_epoch; memset(as, 0, sizeof as); memset(ao, 0xFF, sizeof ao); }
+        for (k = 0; k < 16; k++) {
+            if (v->array_mask & (1u << k)) {
+                if (ae[k] != 1) { glEnableVertexAttribArray(k); ae[k] = 1; as[k] = 0; }
+                if (as[k] != (uint32_t)stride || ao[k] != off) {
+                    glVertexAttribPointer(k, 4, GL_FLOAT, GL_FALSE, (GLsizei)(na * 16), (void *)(uintptr_t)off);
+                    as[k] = (uint32_t)stride; ao[k] = off;
+                }
+                off += 16;
+            } else {
+                if (ae[k] != 0) { glDisableVertexAttribArray(k); ae[k] = 0; }
+                if (!cjc_f() || !(s_gcvok & (1u << k)) || memcmp(s_gcv[k], v->inputs[k], 16)) {
+                    glVertexAttrib4fv(k, v->inputs[k]); memcpy(s_gcv[k], v->inputs[k], 16); s_gcvok |= (unsigned short)(1u << k);
+                }
+            }
         }
     }
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)b->count * 4, v->indices, GL_STREAM_DRAW);
+    if (!s_gring) glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ebytes, v->indices, GL_STREAM_DRAW);
     glEnable(GL_DEPTH_CLAMP);
     glEnable(GL_CLIP_DISTANCE0);
     glEnable(GL_CLIP_DISTANCE1);
-    if (!s_nodraw) glDrawElements(GL_TRIANGLES, (GLsizei)b->count, GL_UNSIGNED_INT, 0);
-    glDisable(GL_DEPTH_CLAMP);
-    glDisable(GL_CLIP_DISTANCE0);
-    glDisable(GL_CLIP_DISTANCE1);
-    glBindVertexArray(s_vao);
+    if (!s_nodraw) cjc_n_draw++;
+    if (!s_nodraw) glDrawElementsBaseVertex(GL_TRIANGLES, (GLsizei)b->count, GL_UNSIGNED_INT, (void *)(uintptr_t)ep, basev);
+    /* s_vao2 stays bound (the fixed-function path binds s_vao); depth clamp and the clip distances stay on: that path turns them off */
 }
 
 /* ---- init --------------------------------------------------------------- */
@@ -993,11 +1692,13 @@ static int init(void)
         set_borderless_fs(s_win, 1);
     }
     focusdiag_init(s_win);
-    SDL_GL_SetSwapInterval(pcs_get(PCS_VSYNC));
+    SDL_GL_SetSwapInterval(vsync_interval(s_win));
     fprintf(stderr, "[GL] %s | %s | %s\n", glGetString(GL_VENDOR), glGetString(GL_RENDERER),
             glGetString(GL_VERSION));
     gamelog_init((const char *)glGetString(GL_VENDOR), (const char *)glGetString(GL_RENDERER),
                  (const char *)glGetString(GL_VERSION));
+    shc_init((const char *)glGetString(GL_VENDOR), (const char *)glGetString(GL_RENDERER),
+             (const char *)glGetString(GL_VERSION));
     s_vs = sh(GL_VERTEX_SHADER, VS);
     {
         size_t n = strlen(FS_HEAD) + strlen(FS_LEGACY_BODY) + 1;
@@ -1040,6 +1741,7 @@ static int init(void)
     glBindBuffer(GL_UNIFORM_BUFFER, s_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof s_cshadow, NULL, GL_STREAM_DRAW);
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
+    shader_prewarm();   /* CJ_GL_SHADER_PREWARM: compile the shader list and exit (launcher) */
     s_nodraw = (e = getenv("CJ_GL_NODRAW")) && *e == '1';
     if ((e = getenv("CJ_GL_VSH")) && *e == '0')
         s_vsh_on = 0;
@@ -1168,6 +1870,7 @@ static void rt_free(Rt *r)
     s_side = sv;
 }
 
+void cj_api_check_rtt(uint32_t surf_va, uint32_t tex_va, int zeta);   /* native_gfx.c */
 static Rt *rt_for(const Nv2aSurface *s)
 {
     int i, lru = 0;
@@ -1522,8 +2225,8 @@ static uint64_t raw_sig(const Nv2aTexture *t)
      * generated-mips choice (CJ_GL_GENMIPS) depends on it. */
     uint64_t h = 0xCBF29CE484222325ull ^ (uint64_t)gen_mips_for(t);
     full = s_texhash_full ? tex_span(t) : 0;
-    if (full && t->offset < 0x04000000u && full > 0x04000000u - t->offset)
-        full = 0x04000000u - t->offset;          /* stay inside guest RAM */
+    if (full && (t->offset & 0x7FFFFFFFu) < g_xbox_contig_size && full > g_xbox_contig_size - (t->offset & 0x7FFFFFFFu))
+        full = g_xbox_contig_size - (t->offset & 0x7FFFFFFFu);          /* stay inside guest RAM */
     if (full) {
         /* Four independent lanes so the multiplies overlap: this runs on
          * every bind of every texture, and with two dependent lanes it was a
@@ -1611,7 +2314,7 @@ static uint32_t upload_dxt(const Nv2aTexture *t, uint32_t nl)
         bytes = (size_t)((src->width + 3) / 4) * ((src->height + 3) / 4) * bb;
         {   /* inside guest RAM: the low 64 MB or its contiguous view at 0x80000000 */
             uint32_t a = src->offset & 0x7FFFFFFFu;
-            if (a >= 0x04000000u || bytes > 0x04000000u - a) break;
+            if (a >= g_xbox_contig_size || bytes > g_xbox_contig_size - a) break;
         }
         glCompressedTexImage2D(GL_TEXTURE_2D, (GLint)lv, fmt, src->width, src->height, 0,
                                (GLsizei)bytes, mem + src->offset);
@@ -1644,7 +2347,7 @@ static int fast_decode32(const Nv2aTexture *t, uint32_t *out)
     if (!sw && t->pitch < w * 4)
         return 0;
     bytes = sw ? (size_t)w * h * 4 : (size_t)t->pitch * (h - 1) + w * 4;
-    if (a >= 0x04000000u || bytes > 0x04000000u - a)
+    if (a >= g_xbox_contig_size || bytes > g_xbox_contig_size - a)
         return 0;
     if (sw)
         xbox_unswizzle_rect(out, mem + t->offset, w, h, 4);
@@ -1665,6 +2368,8 @@ extern uint64_t texpack_key(const void *data, size_t n, uint32_t fmt, uint32_t w
 extern int texpack_want_dump(uint64_t key);
 extern void texpack_dump(uint64_t key, uint32_t w, uint32_t h, uint32_t fmt, const uint32_t *argb);
 extern const uint8_t *texpack_find(uint64_t key, int *w, int *h);
+extern int texpack_pending(uint64_t key);
+static uint64_t s_tp_pend;   /* set by texpack_upload: this texture's replacement is still decoding */
 extern int texpack_skip_format(uint32_t fmt);
 static int s_fastdec;
 static int fast_decode32(const Nv2aTexture *t, uint32_t *out);
@@ -1681,7 +2386,7 @@ static int texpack_upload(const Nv2aTexture *t)
     if (!texpack_active() || t->cube || texpack_skip_format(t->color)) return 0;
     l0.levels = 1;
     n = tex_span(&l0);
-    if (!n || a >= 0x04000000u || n > 0x04000000u - a) return 0;
+    if (!n || a >= g_xbox_contig_size || n > g_xbox_contig_size - a) return 0;
     key = texpack_key(mem + t->offset, n, t->color, t->width, t->height);
     if ((rgba = texpack_find(key, &rw, &rh))) {
         uint32_t d = (uint32_t)(rw > rh ? rw : rh), nl = 1;
@@ -1695,6 +2400,7 @@ static int texpack_upload(const Nv2aTexture *t)
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         return 1;
     }
+    if (texpack_pending(key)) s_tp_pend = key;   /* the original for now; decode_bind swaps the replacement in */
     if (texpack_want_dump(key)) {
         uint32_t *px = malloc((size_t)t->width * t->height * 4);
         if (px && (fast_decode32(&l0, px) || nv2a_backend_decode_texture(&l0, px)))
@@ -1839,7 +2545,7 @@ static int decode_bind(const Nv2aTexture *t)
                 glGenTextures(1, &e->tex);
             }
             e->off = t->offset; e->color = t->color; e->w = t->width; e->h = t->height; e->levels = nl;
-            e->hash = 0;
+            e->hash = 0; e->pend = 0;
             e->next = s_tc_head[b];
             s_tc_head[b] = lru;
         }
@@ -1853,7 +2559,7 @@ static int decode_bind(const Nv2aTexture *t)
                 l0.levels = 1;
                 n = tex_span(&l0);
                 s_texlog_off[s_texlog_n++] = t->offset;
-                if (n && (t->offset & 0x7FFFFFFFu) < 0x04000000u)
+                if (n && (t->offset & 0x7FFFFFFFu) < g_xbox_contig_size)
                     fprintf(stderr, "[TEXLOG] %016llx %ux%u f%02X\n",
                             (unsigned long long)texpack_key((const uint8_t *)xbox_GetMemoryOffset() + t->offset, n, t->color, t->width, t->height),
                             t->width, t->height, t->color);
@@ -1865,12 +2571,15 @@ static int decode_bind(const Nv2aTexture *t)
             if (e->hash && e->hash != h && e->shash == sh) s_texhash_caught++;
             e->shash = sh;
         }
+        if (e->pend && e->hash == h && !texpack_pending(e->pend)) e->hash = h ^ 1;   /* its replacement is ready */
         if (e->hash != h) {
             double tu0 = now_s();
             int upl;
+            s_tp_pend = 0;
             e->rm = texpack_upload(t);
+            e->pend = s_tp_pend;
             upl = e->rm ? 1 : (int)upload_levels(t);
-            s_upload_time += now_s() - tu0; s_upload_n++;
+            { double du = now_s() - tu0; s_upload_time += du; s_up_tot += du; } s_upload_n++;
             if (!upl) {
                 static uint32_t seen[64]; static int nseen; int j;
                 for (j = 0; j < nseen && seen[j] != t->color; j++) ;
@@ -1905,6 +2614,7 @@ static int decode_bind(const Nv2aTexture *t)
  * CONTROL0: MAX_ANISOTROPY log2 in bits 4-5, MAX_LOD_CLAMP 6-17 and
  * MIN_LOD_CLAMP 18-29 (4.8). `mips`: the texture has a mip chain (an FBO or
  * a single-level texture gets the non-mip form of the min filter). */
+static void apply_sampler_gl(const Nv2aTexture *t, int rtt, int mips, GLint gmin, GLint gmag, int32_t bias);
 static void apply_sampler(const Nv2aTexture *t, int rtt, int mips)
 {
     uint32_t min = (t->filter >> 16) & 0xFF, mag = (t->filter >> 24) & 0xF;
@@ -1920,6 +2630,27 @@ static void apply_sampler(const Nv2aTexture *t, int rtt, int mips)
     default: gmin = GL_LINEAR; break;          /* 2, 7 (convolution), unset */
     }
     gmag = mag == 1 ? GL_NEAREST : GL_LINEAR;
+    {   /* the same sampler state as last time on this texture: nothing to set (cjc_tp above) */
+        GLuint id = cjc_cur_tex();
+        uint64_t k = 0xCBF29CE484222325ull;
+        uint32_t in[12];
+        int j;
+        in[0] = (uint32_t)gmin; in[1] = (uint32_t)gmag; in[2] = (uint32_t)rtt; in[3] = (uint32_t)mips;
+        in[4] = t->addr_u; in[5] = t->addr_v; in[6] = t->border_color; in[7] = t->border;
+        in[8] = t->control0; in[9] = t->filter; memcpy(&in[10], &s_lod_bias_add, 4); in[11] = (uint32_t)s_aniso_force;
+        for (j = 0; j < 12; j++) { k ^= in[j]; k *= 0x100000001B3ull; }
+        if (!k) k = 1;
+        if (id && id < CJC_TP_MAX) {
+            if (cjc_f() && cjc_tp[id].k == k && cjc_tp[id].ep == cjc_tp_ep) { cjc_skip += 4; return; }
+            apply_sampler_gl(t, rtt, mips, gmin, gmag, bias);
+            cjc_tp[id].k = k; cjc_tp[id].ep = cjc_tp_ep;
+            return;
+        }
+    }
+    apply_sampler_gl(t, rtt, mips, gmin, gmag, bias);
+}
+static void apply_sampler_gl(const Nv2aTexture *t, int rtt, int mips, GLint gmin, GLint gmag, int32_t bias)
+{
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, gmin);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, gmag);
     if (rtt) {
@@ -2021,6 +2752,8 @@ static Rt *rt_for_zeta(const Nv2aTexture *t, uint32_t *x0, uint32_t *y0)
     return best;
 }
 
+/* CJ_ZETA_SMALL=0: the old whole-size read (to compare) */
+static int zeta_small(void) { static int v = -1; if (v < 0) { const char *e = getenv("CJ_ZETA_SMALL"); v = !(e && *e == '0'); } return v; }
 static void zeta_bind(Rt *r, uint32_t x0, uint32_t y0, uint32_t tw, uint32_t th)
 {
     size_t n = (size_t)tw * th;
@@ -2039,7 +2772,30 @@ static void zeta_bind(Rt *r, uint32_t x0, uint32_t y0, uint32_t tw, uint32_t th)
     if (s_rs == 1)
         glReadPixels((GLint)x0, (GLint)(r->h - y0 - th), (GLsizei)tw, (GLsizei)th,
                      GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, s_zbuf);
-    else {                                  /* scaled FBO: read it whole size, keep one sample per guest pixel */
+    else if (zeta_small()) {
+        /* scaled FBO: shrink it to one sample per guest pixel on the GPU (a nearest blit takes the
+         * same centre sample the CPU loop below takes), then read only that: at scale 5 this is
+         * 1/25 of the bytes. The read still waits for the GPU; doing the whole job on the GPU is next. */
+        static GLuint zfbo, zrbo; static uint32_t zw, zh;
+        GLint dfb = 0, sc = glIsEnabled(GL_SCISSOR_TEST);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+        if (!zfbo) { glGenFramebuffers(1, &zfbo); glGenRenderbuffers(1, &zrbo); }
+        if (zw < tw || zh < th) {
+            zw = tw > zw ? tw : zw; zh = th > zh ? th : zh;
+            glBindRenderbuffer(GL_RENDERBUFFER, zrbo);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, (GLsizei)zw, (GLsizei)zh);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, zfbo);
+            glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, zrbo);
+        }
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, zfbo);
+        if (sc) glDisable(GL_SCISSOR_TEST);
+        glBlitFramebuffer((GLint)(x0 * s_rs), (GLint)((r->h - y0 - th) * s_rs), (GLint)((x0 + tw) * s_rs), (GLint)((r->h - y0) * s_rs),
+                          0, 0, (GLint)tw, (GLint)th, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, zfbo);
+        glReadPixels(0, 0, (GLsizei)tw, (GLsizei)th, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, s_zbuf);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)dfb);
+        if (sc) glEnable(GL_SCISSOR_TEST);
+    } else {                                  /* scaled FBO: read it whole size, keep one sample per guest pixel */
         uint32_t *big = malloc(n * 4 * (size_t)s_rs * s_rs), x, y;
         if (!big) return;
         glReadPixels((GLint)(x0 * s_rs), (GLint)((r->h - y0 - th) * s_rs), (GLsizei)(tw * s_rs), (GLsizei)(th * s_rs),
@@ -2058,6 +2814,7 @@ static void zeta_bind(Rt *r, uint32_t x0, uint32_t y0, uint32_t tw, uint32_t th)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     s_ztw = tw; s_zth = th;
     s_zeta_draw = s_draws;
+    if (s_zeta_reads < 40) fprintf(stderr, "[ZETA] read %ux%u at flip %u (scale %d)\n", tw, th, s_flips, s_rs);
     s_zeta_reads++;
 }
 
@@ -2122,6 +2879,7 @@ static int bind_stage(int st, const Nv2aTexture *t, float tx[4], float *aone)
     if (s_self_on < 0) s_self_on = !getenv("CJ_GL_SELF_COPY") || atoi(getenv("CJ_GL_SELF_COPY")) != 0;
     if (s_zeta_on < 0) s_zeta_on = !getenv("CJ_GL_ZETA_TEX") || atoi(getenv("CJ_GL_ZETA_TEX")) != 0;
     if (s_rtt && (r = rt_for_texture(t, &x0, &y0)) && (r != s_last || s_self_on)) {
+        cj_api_check_rtt(r->va, t->offset, 0);
         dump_src(r);
         if (r == s_last)
             self_copy(r);   /* binds the copy on this unit */
@@ -2133,6 +2891,7 @@ static int bind_stage(int st, const Nv2aTexture *t, float tx[4], float *aone)
         s_rtt_binds++;
         s_last->nd_rtt++;
     } else if (s_zeta_on && (r = rt_for_zeta(t, &x0, &y0)) != NULL) {
+        cj_api_check_rtt(r->zeta, t->offset, 1);
         zeta_bind(r, x0, y0, t->width, t->height);
         tx[0] = 1.0f / t->width;  tx[2] = 0.0f;
         tx[1] = -1.0f / t->height; tx[3] = 1.0f;
@@ -2192,9 +2951,13 @@ static void gl_clear1(const Nv2aSurface *s, const Nv2aRenderState *rs, uint32_t 
         glClear(b);
 }
 
+int cj_api_clear(const Nv2aSurface *s, const Nv2aRenderState *rs, uint32_t *flags, uint32_t *argb, uint32_t *zs, Nv2aSurface *so, Nv2aRenderState *rso);
 static void gl_clear(const Nv2aSurface *s, const Nv2aRenderState *rs,
                      uint32_t flags, uint32_t argb, uint32_t zs)
 {
+    {   static Nv2aSurface so; static Nv2aRenderState rso;
+        if (cj_api_clear(s, rs, &flags, &argb, &zs, &so, &rso)) { s = &so; rs = &rso; } }
+    cj_frec_clear(s, rs, flags, argb, zs);
     if (!init())
         return;
     for (s_side = 0; s_side <= s_ab; s_side++)
@@ -2334,6 +3097,10 @@ static void gl_draw1(const Nv2aSurface *s, const Nv2aBatch *b)
         s_tris += b->count / 3;
         return;
     }
+    glDisable(GL_DEPTH_CLAMP);
+    glDisable(GL_CLIP_DISTANCE0);
+    glDisable(GL_CLIP_DISTANCE1);
+    glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)b->count * sizeof(Nv2aVertex), b->vertices,
                  GL_STREAM_DRAW);
@@ -2346,7 +3113,7 @@ static void gl_draw1(const Nv2aSurface *s, const Nv2aBatch *b)
         for (i = 3; i <= 8; i++) glDisableVertexAttribArray(i);
     }
     xalpha_draw(s, s_last, b->state->color_mask);
-    if (!s_nodraw) glDrawArrays(GL_TRIANGLES, 0, (GLsizei)b->count);
+    if (!s_nodraw) { cjc_n_draw++; glDrawArrays(GL_TRIANGLES, 0, (GLsizei)b->count); }
     s_draws++;
     s_tris += b->count / 3;
 }
@@ -2424,8 +3191,65 @@ static void fliplog_flip(void)
     fprintf(stderr, "[FLIPLOG] flip %u front %08X |%s\n", s_flips, g_nv2a_flip_front_va, buf);
     s_fln = 0;
 }
+void cj_api_check(const Nv2aBatch *b);   /* native_gfx.c, CJ_API_VERIFY */
+void cj_api_check_surface(const Nv2aSurface *s);
+const Nv2aSurface *cj_api_takeover_surface(const Nv2aSurface *s);
+const Nv2aBatch *cj_api_takeover(const Nv2aBatch *b);   /* native_gfx.c, CJ_API_TAKEOVER */
+static double s_to_time;   /* seconds in the takeover's rebuild (perf event: takeover_pct) */
+/* frames.csv stage columns (gamelog.c): ms since the last call in the renderer (all of it, the native
+ * renderer's rebuild, texture uploads, the swap) and GL calls made / filtered out. Game thread. */
+void cj_gl_frame_stages(double *be_ms, double *to_ms, double *up_ms, double *swap_ms, unsigned *gl_calls, unsigned *gl_skipped)
+{
+    static double b0, t0_, u0, w0; static unsigned long long p0, k0;
+    *be_ms = (s_be_tot - b0) * 1000.0; *to_ms = (s_to_tot - t0_) * 1000.0; *up_ms = (s_up_tot - u0) * 1000.0; *swap_ms = (s_swap_tot - w0) * 1000.0;
+    *gl_calls = (unsigned)(cjc_pass - p0); *gl_skipped = (unsigned)(cjc_skip - k0);
+    b0 = s_be_tot; t0_ = s_to_tot; u0 = s_up_tot; w0 = s_swap_tot; p0 = cjc_pass; k0 = cjc_skip;
+}
+/* draws, program switches, texture binds and VAO switches that reached the driver since the last call */
+#ifndef _WIN32
+#include <dirent.h>
+/* Mesa's glthread runs the driver on its own thread ("<process>:gl0"), when it is on. Nothing in GL
+ * says whether it is, so after startup list this process's threads into the log (Deck runs). */
+static void glthread_probe(void)
+{
+    DIR *d = opendir("/proc/self/task");
+    struct dirent *de;
+    char names[1024] = "", path[300], n[64];
+    int gl = 0;
+    size_t l = 0;
+    if (!d) return;
+    while ((de = readdir(d))) {
+        FILE *f;
+        if (de->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "/proc/self/task/%s/comm", de->d_name);
+        if (!(f = fopen(path, "r"))) continue;
+        if (fgets(n, sizeof n, f)) {
+            n[strcspn(n, "\n")] = 0;
+            if (strstr(n, ":gl")) gl = 1;
+            if (l + strlen(n) + 2 < sizeof names) l += (size_t)snprintf(names + l, sizeof names - l, "%s%s", l ? ", " : "", n);
+        }
+        fclose(f);
+    }
+    closedir(d);
+    fprintf(stderr, "[GL] glthread %s (mesa_glthread=%s); threads: %s\n", gl ? "ACTIVE" : "not running",
+            getenv("mesa_glthread") ? getenv("mesa_glthread") : "unset", names);
+}
+#endif
+void cj_gl_frame_changes(unsigned *draws, unsigned *progs, unsigned *texs, unsigned *vaos)
+{
+    static unsigned long long d0, p0, t0, v0;
+    *draws = (unsigned)(cjc_n_draw - d0); *progs = (unsigned)(cjc_n_prog - p0); *texs = (unsigned)(cjc_n_tex - t0); *vaos = (unsigned)(cjc_n_vao - v0);
+    d0 = cjc_n_draw; p0 = cjc_n_prog; t0 = cjc_n_tex; v0 = cjc_n_vao;
+}
 static void gl_draw(const Nv2aSurface *s, const Nv2aBatch *b)
 {
+    cj_api_check(b);
+    cj_api_check_surface(s);
+    {   double tt = now_s();
+        const Nv2aBatch *t = cj_api_takeover(b); if (t) b = t;
+        const Nv2aSurface *u = cj_api_takeover_surface(s); if (u) s = u;
+        { double dt_ = now_s() - tt; s_to_time += dt_; s_to_tot += dt_; } }
+    cj_frec_draw(s, b);
     int lo = 0, hi = s_ab;
     if (!init() || !b->count)
         return;
@@ -2434,6 +3258,10 @@ static void gl_draw(const Nv2aSurface *s, const Nv2aBatch *b)
          * at full speed. The game itself runs unchanged. */
         static int skip = -1;
         if (skip < 0) { const char *e = getenv("CJ_GL_SKIP"); skip = e && e[0] == '1'; if (skip) fprintf(stderr, "[GL] CJ_GL_SKIP=1: drawing only around screenshots\n"); }
+        if (skip && (s_flips & 31) == 0) {   /* a file named draw_all_now ends the skipping (screenshot sessions) */
+            FILE *t = fopen("draw_all_now", "rb");
+            if (t) { fclose(t); remove("draw_all_now"); skip = 0; fprintf(stderr, "[GL] drawing every frame from now on\n"); }
+        }
         if (skip && s_flips >= s_dump_until) return;
     }
     drec_note(s, b);
@@ -2444,7 +3272,7 @@ static void gl_draw(const Nv2aSurface *s, const Nv2aBatch *b)
     for (s_side = lo; s_side <= hi; s_side++)
         gl_draw1(s, b);
     s_side = 0;
-    s_be_time += now_s() - t0;
+    { double db = now_s() - t0; s_be_time += db; s_be_tot += db; }
 }
 
 static void dump_frame(Rt *r, uint32_t w, uint32_t h, const char *tag)
@@ -2554,7 +3382,18 @@ static void mouse_look(int ax[4])
     }
     {   /* the cursor is captured for mouse look, and free (shown) while a menu takes input (src/femouse.c) */
         extern int femouse_menu_active(void);
-        int menu = femouse_menu_active(), want = s_mouse && s_mouse_grab && !menu;
+        /* A menu counts as open until no list has taken input for 1.5 s more: one slow frame (a hitch,
+         * a load) used to drop it for a frame, switching to mouse look, so the mouse's movement became
+         * full right-stick presses in the menu (Camera Mode flipping, focus jumping, Exit taken) and
+         * the cursor was warped to the middle on the way back. */
+        static unsigned menu_ms;
+        int menu_now = femouse_menu_active(), menu, want;
+        if (menu_now) menu_ms = SDL_GetTicks() | 1u;
+        menu = menu_now || (menu_ms && SDL_GetTicks() - menu_ms < 1500u);
+        want = s_mouse && s_mouse_grab && !menu;
+        {   static int lm = -1;
+            if (menu != lm && CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] menu %d (t=%u flip %u)\n", menu, SDL_GetTicks(), s_flips);
+            lm = menu; }
 #define rel s_rel
         if (s_regrab) { rel = -1; s_regrab = 0; }
         if (want != rel) {
@@ -2659,6 +3498,12 @@ static void host_input(void)
     {   /* keyboard and mouse bindings (src/keymap.c; rebindable on the Controller pages) */
         extern int femouse_menu_active(void);
         keymap_pad(k, femouse_menu_active(), s_fem_wheel, &p.dig, p.ana);
+        {   static uint16_t last = 0xFFFF;   /* CJ_INPUT_LOG=1: the keyboard's pad buttons as they change */
+            static int on = -1;
+            if (on < 0) { const char *e = getenv("CJ_INPUT_LOG"); on = e && *e == '1'; }
+            if (on && p.dig != last) fprintf(stderr, "[INPUT] kb dig %04x menu %d flip %u\n", p.dig, femouse_menu_active(), s_flips);
+            last = p.dig;
+        }
     }
     ax[0] = (k[SDL_SCANCODE_D] ? 32767 : 0) - (k[SDL_SCANCODE_A] ? 32767 : 0);
     ax[1] = (k[SDL_SCANCODE_W] ? 32767 : 0) - (k[SDL_SCANCODE_S] ? 32767 : 0);
@@ -2889,7 +3734,7 @@ static void pc_settings_apply(void)
     }
     if (s_pc_gen[PCS_VSYNC] != pcs_gen(PCS_VSYNC)) {
         s_pc_gen[PCS_VSYNC] = pcs_gen(PCS_VSYNC);
-        SDL_GL_SetSwapInterval(pcs_get(PCS_VSYNC));
+        SDL_GL_SetSwapInterval(vsync_interval(s_win));
     }
     if (s_pc_gen[PCS_WIDESCREEN] != pcs_gen(PCS_WIDESCREEN)) {
         s_pc_gen[PCS_WIDESCREEN] = pcs_gen(PCS_WIDESCREEN);
@@ -2909,10 +3754,16 @@ static void gl_flip(void)
 {
     SDL_Event ev;
     double flip_t0 = now_s();
+    cj_frec_flip();          /* frame_rec.c: the flip ending a recorded frame, then maybe start one */
+    cj_frec_flip_begin();
     if (!init())
         return;
     fliplog_flip();
     s_flips++;
+#ifndef _WIN32
+    if (s_flips == 600) glthread_probe();
+#endif
+    shc_tick();
     cj_fps_tick();
     if (s_present || s_last) {
         Rt *p = s_present ? s_present : s_last;
@@ -3087,7 +3938,7 @@ static void gl_flip(void)
                 if (!on && cjmod_ctrl_page_showing()) on = glyph_kb_mode() ? 2 : 1;   /* main menu Options > Controller */
             }
             if (on != texpack_builtin_ctrl) {
-                if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[CTRLART] %d -> %d (pause %08x)\n", texpack_builtin_ctrl, on, inst);
+                if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[CTRLART] %d -> %d (pause %08x)\n", texpack_builtin_ctrl, on, inst);
                 texpack_builtin_ctrl = on;
                 for (i = 0; i < NTEX; i++)
                     if (s_tc[i].w == 512 && s_tc[i].h == 512 && s_tc[i].color == 0x0E) s_tc[i].hash = 0;
@@ -3107,8 +3958,25 @@ static void gl_flip(void)
                 fclose(t);
                 remove("skin_now");
                 memcpy(&fe, m + 0x0048ce58, 4);   /* FEMainMenu::ms_pInstance */
-                if (fe) { int16_t s = (int16_t)sk; memcpy(m + fe + 0x820, &s, 2); }   /* m_PlayerSkin */
+                if (fe) {   /* as FEMainMenu::SetPlayerSkin: the skin, then reload it (update state 0, not loaded) */
+                    int16_t s = (int16_t)sk, z = 0;
+                    memcpy(m + fe + 0x820, &s, 2);          /* m_PlayerSkin */
+                    memcpy(m + fe + 0x822, &z, 2);          /* m_PredSkinUpdateState */
+                    memset(m + fe + 0x824, 0, 4);            /* m_PredSkinUpdateTime */
+                    m[0x0048ce5e] = 0;                       /* ms_bPredSkinLoaded */
+                }
                 fprintf(stderr, "[SKIN] %d (FEMainMenu %08x)\n", sk, fe);
+            }
+        }
+        if (trig && (s_flips & 7) == 6) {   /* dev: scale_now holds a Resolution Scale (1-5), applied live as from PC Settings */
+            FILE *t = fopen("scale_now", "rb");
+            if (t) {
+                int v = 0;
+                if (fscanf(t, "%d", &v) != 1) v = 0;
+                fclose(t);
+                remove("scale_now");
+                if (v >= 1 && v <= 5) pcs_set(PCS_SCALE, v);
+                fprintf(stderr, "[SCALE] %d\n", v);
             }
         }
         if (now || (at >= 0 && (s_flips == (uint32_t)at || s_flips == (uint32_t)at + 30))) {
@@ -3135,7 +4003,7 @@ static void gl_flip(void)
     {
         double ts0 = now_s();
         SDL_GL_SwapWindow(s_win);
-        s_swap_time += now_s() - ts0;
+        { double dsw = now_s() - ts0; s_swap_time += dsw; s_swap_tot += dsw; }
     }
     {   /* CJ_TEST_F9_AT=<flip>: press F9 at that flip (tests the burst capture) */
         static long at = -2;
@@ -3225,7 +4093,18 @@ static void gl_flip(void)
             qs_osd_note(fps == 60 ? "Frame rate 60 (F7)" : "Frame rate 30 (F7)");
             gamelog_event("fps", "\"to\":%d", fps);
         }
-        if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F12) s_shot_req = 1;
+        if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F12 && (ev.key.keysym.mod & KMOD_CTRL)) {
+            /* CJ_DEBUG_KEYS=1, Ctrl+F12: XApp::SetMissionComplete (mission state 2, its timer 0), Ctrl+Shift+F12:
+             * SetMissionFailed (state 3). For reaching the end-of-chapter screens in tests. */
+            const char *e = getenv("CJ_DEBUG_KEYS");
+            uint32_t app;
+            uint8_t *m = (uint8_t *)xbox_GetMemoryOffset();
+            if (e && *e == '1' && m && (memcpy(&app, m + 0x004931E8u, 4), app)) {
+                uint32_t st = (ev.key.keysym.mod & KMOD_SHIFT) ? 3u : 2u; float z = 0.0f;
+                memcpy(m + app + 0xD04, &st, 4); memcpy(m + app + 0xD08, &z, 4);
+                fprintf(stderr, "[DEBUG] mission state set to %u\n", st);
+            }
+        } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F12) s_shot_req = 1;
         if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
             SDL_SetRelativeMouseMode(SDL_FALSE);   /* Alt+Tab: hand the cursor back at once */
         }
@@ -3251,7 +4130,7 @@ static void gl_flip(void)
             gamelog_event("controller_removed", "");
         }
     }
-    s_be_time += now_s() - flip_t0;
+    { double db = now_s() - flip_t0; s_be_time += db; s_be_tot += db; }
     host_input();
     gamelog_frame(s_flips, s_draws, s_tris, (const void *)&cj_host_pad);
     {
@@ -3266,6 +4145,7 @@ static void gl_flip(void)
             SDL_SetWindowTitle(s_win, title);
             {
 #ifdef _WIN32
+                {   extern void cj_fault_census_dump(void); static unsigned fcn; if (++fcn % 15 == 0) cj_fault_census_dump(); }
                 extern volatile long long cj_exc_av, cj_exc_ss, cj_exc_other;
                 static long long e0, e1, e2;
                 long long a = cj_exc_av, b2 = cj_exc_ss, c = cj_exc_other;
@@ -3278,8 +4158,10 @@ static void gl_flip(void)
                         fps, s_flips, 100.0 * s_be_time / span, 100.0 * s_swap_time / span, 100.0 * s_upload_time / span,
                         (unsigned long long)s_upload_n, (unsigned long long)(s_tc_evictions - ev_last), (a - e0) / span, (b2 - e1) / span, (c - e2) / span);
                 s_swap_time = s_upload_time = 0; s_upload_n = 0; ev_last = s_tc_evictions;
-                gamelog_event("perf", "\"fps\":%.1f,\"renderer_pct\":%.0f,\"exc_access_s\":%.0f,\"exc_step_s\":%.0f", fps,
-                              100.0 * s_be_time / span, (a - e0) / span, (b2 - e1) / span);
+                {   static unsigned long long p0, k0;
+                    gamelog_event("perf", "\"fps\":%.1f,\"renderer_pct\":%.0f,\"takeover_pct\":%.1f,\"gl_calls_s\":%.0f,\"gl_skipped_s\":%.0f,\"exc_access_s\":%.0f,\"exc_step_s\":%.0f", fps,
+                                  100.0 * s_be_time / span, 100.0 * s_to_time / span, (cjc_pass - p0) / span, (cjc_skip - k0) / span, (a - e0) / span, (b2 - e1) / span);
+                    p0 = cjc_pass; k0 = cjc_skip; s_to_time = 0; }
                 e0 = a; e1 = b2; e2 = c; s_be_time = 0;
                 fflush(stdout); fflush(stderr);
                 (void)nlog;
@@ -3358,15 +4240,20 @@ static uint32_t gl_zpass(int op, uint32_t arg)
     }
 }
 
+uint64_t cj_gl_draw_count(void) { return s_draws; }   /* native_gfx.c API trace: draws per API call */
 static const Nv2aBackend s_gl = { gl_clear, gl_draw, gl_flip, gl_vsh_accept, gl_zpass };
+const Nv2aBackend *cj_gl_backend(void) { return &s_gl; }   /* frame_rec.c replay */
 
 /* Windows: called from main() after the defaults / pcj.ini are applied
  * (a constructor would run before them). */
 void cj_gl_register_env(void)
 {
+    static int done;
     const char *e = getenv("CJ_GL");
-    if (e && *e == '1') {
+    if (!done && e && *e == '1') {
+        done = 1;
         nv2a_backend_register(&s_gl);
+        {   extern int (*nv2a_raw_vertex_ok)(void); nv2a_raw_vertex_ok = raw_vertex_known_ok; }
         fprintf(stderr, "[GL] OpenGL back end registered (CJ_GL=1)\n");
     }
 }

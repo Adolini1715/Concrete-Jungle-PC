@@ -129,7 +129,7 @@ static void load_index(void)
 static int archive_of(uint32_t pData)
 {
     char nm[0x178 + 1], *p;
-    memcpy(nm, XBOX_PTR(pData + AFD_NAME), 0x178);
+    memcpy(nm, (const void *)XBOX_PTR(pData + AFD_NAME), 0x178);
     nm[0x178] = 0;
     lower(nm);
     p = strstr(nm, "filelist.");

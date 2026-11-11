@@ -43,3 +43,6 @@ install-log.txt
 /Predator Concrete Jungle PC/
 /PUT YOUR GAME HERE/*
 !/PUT YOUR GAME HERE/README.txt
+shadercache/
+d3dtrace_*.txt
+apiverify.txt

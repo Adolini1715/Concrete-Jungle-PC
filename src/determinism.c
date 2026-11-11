@@ -1,3 +1,4 @@
+extern unsigned int g_xbox_contig_size;   /* xboxrecomp kernel.h: the contiguous window (uint32_t), 64 MB unless RECOMP_CONTIG_MB */
 /*
  * Frame-count based runs and vblank lockstep (docs/determinism.md).
  *
@@ -246,7 +247,7 @@ static void det_dump(void)
     if ((f = fopen(path, "wb"))) { fwrite((void *)XBOX_PTR(HEAP_LO), 1, HEAP_HI - HEAP_LO, f); fclose(f); }
     if (getenv("CJ_DET_DUMP_CONT")) {   /* contiguous (D3D/FE) memory 0x80000000..0x84000000 */
         snprintf(path, sizeof path, "%s/cont_f%u.bin", d, cj_det_frame);
-        if ((f = fopen(path, "wb"))) { fwrite((void *)XBOX_PTR(0x80000000u), 1, 0x04000000u, f); fclose(f); }
+        if ((f = fopen(path, "wb"))) { fwrite((void *)XBOX_PTR(0x80000000u), 1, g_xbox_contig_size, f); fclose(f); }
     }
     if (g_helper_tib_pool) fprintf(stderr, "[DET] helper TIB pool %08x..%08x\n", g_helper_tib_pool, g_helper_tib_pool_end);
 }
@@ -313,7 +314,7 @@ static void det_main_update(void)
         if (s_cont)   /* contiguous memory (D3D/FE: vertex buffers, textures, push buffer): image differences
                        * whose cause is outside .data and the heap window (docs/promote.md, failure class 4) */
             fprintf(stderr, "[DET] f=%u data=%016llx heap=%016llx cont=%016llx\n", cj_det_frame,
-                    (unsigned long long)dh, (unsigned long long)hh, (unsigned long long)range_hash(0x80000000u, 0x84000000u));
+                    (unsigned long long)dh, (unsigned long long)hh, (unsigned long long)range_hash(0x80000000u, (0x80000000u + g_xbox_contig_size)));
         else
         fprintf(stderr, "[DET] f=%u data=%016llx heap=%016llx\n", cj_det_frame,
                 (unsigned long long)dh, (unsigned long long)hh);

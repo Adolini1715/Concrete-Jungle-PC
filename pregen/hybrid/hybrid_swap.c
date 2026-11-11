@@ -4637,7 +4637,73 @@ void sub_000FC300(void)
     (void)fp0; swap_ck(s, n);
 }
 
-static swap_stat *const s_all[] = {&st_001077C0, &st_00107A40, &st_00107C30, &st_00107A90, &st_00107520, &st_00108FD0, &st_000DB970, &st_000DC860, &st_000DBD50, &st_001B97B0, &st_001B9A10, &st_001B9460, &st_000F97D0, &st_000F9680, &st_000F8F90, &st_000F8B20, &st_00209270, &st_002084E0, &st_001D20F0, &st_001D2A80, &st_002CDF60, &st_002CE250, &st_00199F40, &st_00199CA0, &st_00021E70, &st_00232F30, &st_0027E4A0, &st_00081800, &st_000F4AC0, &st_00198310, &st_001840C0, &st_002168A0, &st_0021EE80, &st_00105330, &st_0012D8F0, &st_0012DB80, &st_00216070, &st_002154A0, &st_0026EBF0, &st_002582D0, &st_00258210, &st_00129270, &st_00128610, &st_001AED60, &st_0027A640, &st_002CE720, &st_002CE970, &st_001B33A0, &st_001B3C40, &st_002490D0, &st_002491F0, &st_00134F60, &st_001347F0, &st_00271D30, &st_00271D00, &st_00284DD0, &st_001B9D70, &st_001BA1F0, &st_0021E900, &st_0021E3E0, &st_0012A360, &st_0012A8B0, &st_0013E120, &st_00173110, &st_001736E0, &st_002163D0, &st_00216340, &st_0024E0C0, &st_0024DDD0, &st_0028CD00, &st_002910D0, &st_002BD590, &st_002BD550, &st_002BD9E0, &st_002BD910, &st_000F7140, &st_000F68E0, &st_00205200, &st_002052A0, &st_00274DA0, &st_00278FA0, &st_002C7140, &st_002C7A60, &st_002C8C20, &st_000E3B60, &st_00222080, &st_0024B020, &st_00259B50, &st_000E0360, &st_00109D90, &st_001FDC50, &st_00088930, &st_000D2B10, &st_000D9500, &st_000FB0B0, &st_001A6AF0, &st_001AB660, &st_0020E870, &st_002211E0, &st_0024F7E0, &st_00282ED0, &st_00284C10, &st_00272290, &st_0021EAD0, &st_00271BD0, &st_000D06A0, &st_0012DD70, &st_001A68B0, &st_001E24C0, &st_00247DC0, &st_002588C0, &st_0027DBA0, &st_002859A0, &st_002C1E10, &st_001ABBE0, &st_002BEAD0, &st_0010C4F0, &st_0016DE60, &st_000C5210, &st_000E9A00, &st_000EAAD0, &st_000E7960, &st_000F2A90, &st_000F5520, &st_00150960, &st_0016B130, &st_00165450, &st_0016A400, &st_00160760, &st_00168600, &st_001659E0, &st_0015FAA0, &st_001689C0, &st_00167FA0, &st_001A4390, &st_001A59F0, &st_000FB100, &st_000FC300};
+/* 0x000D2200 FEHud::UpdateBossBar (FEHud) */
+extern void sub_000D2200_gen(void);
+extern void cjn_000D2200(void);
+static swap_stat st_000D2200 = {"000D2200", "FEHud::UpdateBossBar", 0, 0, 0, 0, 1469598103934665603ull};
+void sub_000D2200_enter(void) { st_000D2200.enter++; }
+void sub_000D2200(void)
+{
+    if (s_mode < 0) init_mode();
+    swap_stat *s = &st_000D2200;
+    uint64_t n = ++s->calls;
+    uint32_t self = g_ecx, esp0 = g_esp, b = g_ebx, si = g_esi, di = g_edi;
+    int hs = n <= s_hash_n;
+    uint64_t pre = 0;
+    if (hs) { pre = deep_hash(1469598103934665603ull, self, 1024);
+    for (int i = 1; i <= 0; i++) pre = fnv(pre, norm(MEM32(esp0 + 4 * i))); }
+    int fp0 = g_fp_top;
+    swap_dump(s->va, n, "pre");
+    if (cjv_want("000D2200", n)) { cjv_begin(); sub_000D2200_gen(); if (!cjv_mid()) cjv_skip("000D2200", "FEHud::UpdateBossBar", n); else { sub_000D2200_gen(); cjv_mid2(); if (cjv_self()) sub_000D2200_gen(); else { cjn_000D2200(); g_esp += 4; } cjv_end("000D2200", "FEHud::UpdateBossBar", n, 0); } }
+    else if (mod_on("000D2200")) { cjn_000D2200(); g_esp += 4; } else sub_000D2200_gen();
+    swap_dump(s->va, n, "post");
+    if (g_esp != esp0 + 4) s->esp_bad++;
+    if (g_ebx != b || g_esi != si || g_edi != di) s->csr_bad++;
+    uint64_t post = 0;
+    if (hs) { post = deep_hash(1469598103934665603ull, self, 1024);
+    for (int i = 1; i <= 0; i++) { uint32_t a = MEM32(esp0 + 4 * i); if (is_ptr(a)) post = deep_hash(post, a, 4); } }
+    uint32_t r = norm(0);
+    if (hs) s->hash = fnv(fnv(fnv(s->hash, (uint32_t)pre), (uint32_t)post), r);
+    if (n <= s_log_n)
+        fprintf(stderr, "[SWAP] %s #%llu f=%u this=%08X ret=%08X esp+%d pre=%016llx post=%016llx\n", s->va,
+                (unsigned long long)n, cj_det_frame, self, r, (int)(g_esp - esp0), (unsigned long long)pre, (unsigned long long)post);
+    (void)fp0; swap_ck(s, n);
+}
+
+/* 0x002C48A0 EXAudio_Fader::FaderEndUpdate (EXAudioBase) */
+extern void sub_002C48A0_gen(void);
+extern void cjn_002C48A0(void);
+static swap_stat st_002C48A0 = {"002C48A0", "EXAudio_Fader::FaderEndUpdate", 0, 0, 0, 0, 1469598103934665603ull};
+void sub_002C48A0_enter(void) { st_002C48A0.enter++; }
+void sub_002C48A0(void)
+{
+    if (s_mode < 0) init_mode();
+    swap_stat *s = &st_002C48A0;
+    uint64_t n = ++s->calls;
+    uint32_t self = g_ecx, esp0 = g_esp, b = g_ebx, si = g_esi, di = g_edi;
+    int hs = n <= s_hash_n;
+    uint64_t pre = 0;
+    if (hs) { pre = deep_hash(1469598103934665603ull, self, 16);
+    for (int i = 1; i <= 1; i++) pre = fnv(pre, norm(MEM32(esp0 + 4 * i))); }
+    int fp0 = g_fp_top;
+    swap_dump(s->va, n, "pre");
+    if (cjv_want("002C48A0", n)) { cjv_begin(); sub_002C48A0_gen(); if (!cjv_mid()) cjv_skip("002C48A0", "EXAudio_Fader::FaderEndUpdate", n); else { sub_002C48A0_gen(); cjv_mid2(); if (cjv_self()) sub_002C48A0_gen(); else { cjn_002C48A0(); g_esp += 8; } cjv_end("002C48A0", "EXAudio_Fader::FaderEndUpdate", n, 0); } }
+    else if (mod_on("002C48A0")) { cjn_002C48A0(); g_esp += 8; } else sub_002C48A0_gen();
+    swap_dump(s->va, n, "post");
+    if (g_esp != esp0 + 8) s->esp_bad++;
+    if (g_ebx != b || g_esi != si || g_edi != di) s->csr_bad++;
+    uint64_t post = 0;
+    if (hs) { post = deep_hash(1469598103934665603ull, self, 16);
+    for (int i = 1; i <= 1; i++) { uint32_t a = MEM32(esp0 + 4 * i); if (is_ptr(a)) post = deep_hash(post, a, 4); } }
+    uint32_t r = norm(0);
+    if (hs) s->hash = fnv(fnv(fnv(s->hash, (uint32_t)pre), (uint32_t)post), r);
+    if (n <= s_log_n)
+        fprintf(stderr, "[SWAP] %s #%llu f=%u this=%08X ret=%08X esp+%d pre=%016llx post=%016llx\n", s->va,
+                (unsigned long long)n, cj_det_frame, self, r, (int)(g_esp - esp0), (unsigned long long)pre, (unsigned long long)post);
+    (void)fp0; swap_ck(s, n);
+}
+
+static swap_stat *const s_all[] = {&st_001077C0, &st_00107A40, &st_00107C30, &st_00107A90, &st_00107520, &st_00108FD0, &st_000DB970, &st_000DC860, &st_000DBD50, &st_001B97B0, &st_001B9A10, &st_001B9460, &st_000F97D0, &st_000F9680, &st_000F8F90, &st_000F8B20, &st_00209270, &st_002084E0, &st_001D20F0, &st_001D2A80, &st_002CDF60, &st_002CE250, &st_00199F40, &st_00199CA0, &st_00021E70, &st_00232F30, &st_0027E4A0, &st_00081800, &st_000F4AC0, &st_00198310, &st_001840C0, &st_002168A0, &st_0021EE80, &st_00105330, &st_0012D8F0, &st_0012DB80, &st_00216070, &st_002154A0, &st_0026EBF0, &st_002582D0, &st_00258210, &st_00129270, &st_00128610, &st_001AED60, &st_0027A640, &st_002CE720, &st_002CE970, &st_001B33A0, &st_001B3C40, &st_002490D0, &st_002491F0, &st_00134F60, &st_001347F0, &st_00271D30, &st_00271D00, &st_00284DD0, &st_001B9D70, &st_001BA1F0, &st_0021E900, &st_0021E3E0, &st_0012A360, &st_0012A8B0, &st_0013E120, &st_00173110, &st_001736E0, &st_002163D0, &st_00216340, &st_0024E0C0, &st_0024DDD0, &st_0028CD00, &st_002910D0, &st_002BD590, &st_002BD550, &st_002BD9E0, &st_002BD910, &st_000F7140, &st_000F68E0, &st_00205200, &st_002052A0, &st_00274DA0, &st_00278FA0, &st_002C7140, &st_002C7A60, &st_002C8C20, &st_000E3B60, &st_00222080, &st_0024B020, &st_00259B50, &st_000E0360, &st_00109D90, &st_001FDC50, &st_00088930, &st_000D2B10, &st_000D9500, &st_000FB0B0, &st_001A6AF0, &st_001AB660, &st_0020E870, &st_002211E0, &st_0024F7E0, &st_00282ED0, &st_00284C10, &st_00272290, &st_0021EAD0, &st_00271BD0, &st_000D06A0, &st_0012DD70, &st_001A68B0, &st_001E24C0, &st_00247DC0, &st_002588C0, &st_0027DBA0, &st_002859A0, &st_002C1E10, &st_001ABBE0, &st_002BEAD0, &st_0010C4F0, &st_0016DE60, &st_000C5210, &st_000E9A00, &st_000EAAD0, &st_000E7960, &st_000F2A90, &st_000F5520, &st_00150960, &st_0016B130, &st_00165450, &st_0016A400, &st_00160760, &st_00168600, &st_001659E0, &st_0015FAA0, &st_001689C0, &st_00167FA0, &st_001A4390, &st_001A59F0, &st_000FB100, &st_000FC300, &st_000D2200, &st_002C48A0};
 void cj_swap_report(const char *tag)
 {
     for (unsigned i = 0; i < sizeof s_all / sizeof s_all[0]; i++)

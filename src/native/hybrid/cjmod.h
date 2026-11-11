@@ -34,6 +34,8 @@ int cjmod_cam_step(float game_yaw, float game_pitch, float tgt_yaw, float tgt_pi
 float cjmod_cam_out(int i);
 float cjmod_cam_pivot_k(int axis);
 float cjmod_cam_dist(float cur, float blocked);
+/* Boss bar on damage (mods/FEHud.cpp): previous health in an actor slot, stores the new. */
+float cjmod_boss_health(int slot, float h);
 /* Movement dials (src/native/hybrid/cjmod_move.c, docs/movement-dials.md): 1.0 = original. */
 float cjmod_jump_scale(void);
 float cjmod_run_accel(void);

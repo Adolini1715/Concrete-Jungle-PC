@@ -118,11 +118,34 @@ static int thr_index(uint32_t tid)
     return -1;
 }
 
+/* Hitch capture: the game thread's (thread 0) last RING_N samples with their times. When gamelog.c
+ * flags a hitch it calls prof_spike, which writes the samples inside that frame to
+ * spike-<n>.txt in prof.txt's format (tools/prof_report.py reads it), so the log says what the
+ * game thread was doing during each hitch. */
+#define RING_N 4096
+static struct { volatile uint64_t us, key; } s_ring[RING_N];
+static volatile uint32_t s_ring_n;
+static uint64_t prof_now_us(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER c, f; QueryPerformanceCounter(&c); QueryPerformanceFrequency(&f);
+    return (uint64_t)((double)c.QuadPart * 1e6 / (double)f.QuadPart);
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);   /* async-signal-safe */
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+#endif
+}
+
 static void record(int ti, uintptr_t pc)
 {
     uintptr_t off;
     int m = mod_of(pc, &off);
     uint64_t key = ((uint64_t)ti << 56) | ((uint64_t)m << 48) | (off & 0xFFFFFFFFFFFFull);
+    if (ti == 0) {
+        uint32_t r = __atomic_fetch_add(&s_ring_n, 1, __ATOMIC_RELAXED) % RING_N;
+        s_ring[r].us = prof_now_us();
+        s_ring[r].key = key;
+    }
     uint32_t h = (uint32_t)((key * 0x9E3779B97F4A7C15ull) >> (64 - TAB_BITS));
     __atomic_fetch_add(&s_total, 1, __ATOMIC_RELAXED);
     if (ti >= 0 && ti < MAX_THREADS) __atomic_fetch_add(&s_thr[ti].samples, 1, __ATOMIC_RELAXED);
@@ -288,6 +311,44 @@ static void write_report(void)
     for (int i = 0; i < n; i++)
         fprintf(f, "raw %d %d %llx %u\n", (int)(ents[i].key >> 56), (int)((ents[i].key >> 48) & 0x7F),
                 (unsigned long long)(ents[i].key & 0xFFFFFFFFFFFFull), ents[i].count);
+    fclose(f);
+}
+
+static int s_on;   /* the sampler is running */
+/* the last `ms` milliseconds of game-thread samples, to spike-<n>.txt (first 30 hitches) */
+void prof_spike(double ms, unsigned frame)
+{
+    static unsigned nspike;
+    static Ent ents[RING_N];
+    uint64_t now, from;
+    uint32_t end, i, k;
+    int n = 0;
+    char path[1100];
+    FILE *f;
+    const char *d;
+    if (!s_on || nspike >= 30) return;
+    now = prof_now_us(); from = now - (uint64_t)(ms * 1000.0);
+    end = __atomic_load_n(&s_ring_n, __ATOMIC_ACQUIRE);
+    for (k = 0; k < RING_N && k < end; k++) {
+        i = (end - 1 - k) % RING_N;
+        uint64_t us = s_ring[i].us, key = s_ring[i].key;
+        if (us < from) break;
+        int j;
+        for (j = 0; j < n && ents[j].key != key; j++) ;
+        if (j == n) { ents[n].key = key; ents[n].count = 0; n++; }
+        ents[j].count++;
+    }
+    if (!n) return;
+    qsort(ents, n, sizeof(Ent), cmp_ent);
+    d = gamelog_dir();
+    snprintf(path, sizeof path, "%s%sspike-%02u.txt", d ? d : ".", d ? "/" : "", ++nspike);
+    if (!(f = fopen(path, "w"))) return;
+    fprintf(f, "# pcj hitch: frame %u, %.1f ms; game-thread samples in it (%d Hz)\n# modules\n", frame, ms, s_hz);
+    for (int m = 0; m < s_nmods; m++)
+        fprintf(f, "mod %d %s %llx %llx\n", m, s_mods[m].name, (unsigned long long)s_mods[m].base, (unsigned long long)s_mods[m].end);
+    fprintf(f, "\n# raw: thread module offset count\n");
+    for (int x = 0; x < n; x++)
+        fprintf(f, "raw 0 %d %llx %u\n", (int)((ents[x].key >> 48) & 0x7F), (unsigned long long)(ents[x].key & 0xFFFFFFFFFFFFull), ents[x].count);
     fclose(f);
 }
 
@@ -477,6 +538,7 @@ void prof_start(void)
     if (s_hz < 10) s_hz = 10;
     if (s_hz > 2000) s_hz = 2000;
     s_t0 = time(NULL);
+    s_on = 1;
     refresh_mods();
 #ifdef _WIN32
     HANDLE h = CreateThread(NULL, 0, sampler, NULL, 0, NULL);

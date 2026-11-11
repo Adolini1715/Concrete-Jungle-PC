@@ -1,3 +1,4 @@
+extern unsigned int g_xbox_contig_size;   /* xboxrecomp kernel.h: the contiguous window (uint32_t), 64 MB unless RECOMP_CONTIG_MB */
 /* Player movement dials (pcj.ini; docs/movement-dials.md). Percentages, 100 = the original.
  *   CJ_JUMP_HEIGHT   every player jump's target height (XItemPhysics::SetThrustToAttainHeight,
  *                    mods/XItemPhysics.cpp; the player's physics only)
@@ -42,7 +43,11 @@ float cjmod_jump_scale(void)
     return s;
 }
 
-/* Every frame (cj_fps_tick): keep the player's gravity at the dial's value. */
+void gamelog_event(const char *type, const char *fmt, ...);   /* gamelog.c */
+static void charge_reset_tick(uint8_t *mem, uint32_t h);
+
+/* Every frame (cj_fps_tick): keep the player's gravity at the dial's value, and clear a jump
+ * charge that ended without a jump (charge_reset_tick). */
 void cjmod_move_tick(void)
 {
     static float g = -1.0f;
@@ -52,14 +57,16 @@ void cjmod_move_tick(void)
         g = pct("CJ_GRAVITY");
         if (g != 1.0f) fprintf(stderr, "[MOVE] player gravity %.0f%%\n", g * 100.0f);
     }
-    if (g == 1.0f || cj_det_enabled()) return;
+    if (cj_det_enabled()) return;
     mem = (uint8_t *)xbox_GetMemoryOffset();
     h = *(volatile uint32_t *)(mem + VA_PLAYER_INSTANCE);
-    if (h < 0x10000u || h >= 0x84000000u) return;
+    if (h < 0x10000u || h >= (0x80000000u + g_xbox_contig_size)) return;
+    charge_reset_tick(mem, h);
+    if (g == 1.0f) return;
     item = *(volatile uint32_t *)(mem + h + 4);
-    if (item < 0x10000u || item >= 0x84000000u) return;
+    if (item < 0x10000u || item >= (0x80000000u + g_xbox_contig_size)) return;
     phys = *(volatile uint32_t *)(mem + item + 0x148);
-    if (phys < 0x10000u || phys >= 0x84000000u) return;
+    if (phys < 0x10000u || phys >= (0x80000000u + g_xbox_contig_size)) return;
     {
         volatile float *pg = (volatile float *)(mem + phys + 0x34);
         float want = RETAIL_GRAVITY * g;
@@ -275,6 +282,46 @@ int cjmod_run_charging(void)
     return s_rc;
 }
 void cjmod_run_charge_touch(int on) { s_rc = on; s_rc_ns = xbox_HostNowNs(); }
+
+/* Bunny-hop fix (patch 0.2.0). The jump charge lives in XItemHandler_Player::m_CrouchTimer (+0x22c)
+ * and only DoCrouch's launch clears it. A charge that ends any other way (the running charge
+ * expiring after a fall, a hit, an attack or a ledge grab; a standing charge cut off by a fall)
+ * left its time there, and the next jump started from idle, however short the tap, launched at
+ * that power: a tap gave the full charged jump. Outside the crouch (mode 2) and with no running
+ * charge in progress, a charge is over, so its time and any pending release crouch are cleared.
+ * CJ_CHARGE_FIX=0 turns it off (the old behaviour, for comparison). */
+static void charge_reset_tick(uint8_t *mem, uint32_t h)
+{
+    static int on = -1;
+    volatile uint32_t *mode = (volatile uint32_t *)(mem + h + 0x20c);
+    volatile float *timer = (volatile float *)(mem + h + 0x22c);
+    if (on < 0) { const char *e = getenv("CJ_CHARGE_FIX"); on = !(e && *e == '0'); }
+    {   /* Every jump: height above its take-off point and how long the crouch before it lasted, to
+         * the session log (events.jsonl "jump"; stderr with CJ_CHARGE_LOG=1). A bunny hop shows as a
+         * short crouch with a full-charge height. */
+        static int lg = -1, in_air, crouch_frames, last_crouch; static float y0, ymax, charge0;
+        uint32_t item = *(volatile uint32_t *)(mem + h + 4);
+        float y = item >= 0x10000u && item < (0x80000000u + g_xbox_contig_size) ? *(volatile float *)(mem + item + 0xcc) : 0.0f;
+        if (lg < 0) { const char *e = getenv("CJ_CHARGE_LOG"); lg = e && *e == '1'; }
+        if (*mode == 2) crouch_frames++;
+        if (*mode == 3 && !in_air) { in_air = 1; y0 = ymax = y; charge0 = *timer; last_crouch = crouch_frames; }
+        else if (*mode == 3) { if (y > ymax) ymax = y; }
+        else if (in_air) {
+            in_air = 0;
+            gamelog_event("jump", "\"height\":%.2f,\"crouch_frames\":%d,\"charge_s\":%.2f", ymax - y0, last_crouch, charge0);
+            if (lg) fprintf(stderr, "[MOVE] jump height %.2f (crouch %d frames, charge %.2f s)\n", ymax - y0, last_crouch, charge0);
+        }
+        if (*mode != 2 && *mode != 3) crouch_frames = 0;
+    }
+    if (!on || *mode == 2 || cjmod_run_charging()) return;
+    if (*timer != 0.0f) {
+        static int logged;
+        if (logged++ < 20) fprintf(stderr, "[MOVE] stale jump charge cleared (%.2f s, mode %u)\n", *timer, *mode);
+        gamelog_event("charge_cleared", "\"charge_s\":%.2f,\"mode\":%u", *timer, *mode);
+        *timer = 0.0f;
+    }
+    s_crouch_hold = 0.0f;
+}
 /* the run's target inertia (original curve) while charging: CJ_CHARGE_MOVE percent of its ground speed */
 float cjmod_charge_cap(float mag) { return cjmod_run_charging() ? cjmod_run_inv(orig_run(mag) * cjmod_charge_move()) : mag; }
 void cjmod_crouch_hold_start(void)
@@ -331,4 +378,16 @@ void cjmod_grab_log(int what, int flags, float a, float b, float mul, float prob
     if (on < 0) { const char *e = getenv("CJ_GRAB_LOG"); on = e && *e == '1'; }
     if (!on || n++ > 4000) return;
     fprintf(stderr, "[GRAB] %d flags=%x a=%.3f b=%.3f mul=%.3f hands=%.3f\n", what, flags, a, b, mul, probe_y);
+}
+
+/* Boss bar on damage (mods/FEHud.cpp): the last health seen per actor slot; returns the previous
+ * value and stores the new one (h < 0: no boss in that slot). */
+float cjmod_boss_health(int slot, float h)
+{
+    static float last[128];
+    float prev;
+    if (slot < 0 || slot >= 128) return -1.0f;
+    prev = last[slot];
+    last[slot] = h;
+    return prev;
 }

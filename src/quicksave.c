@@ -1,3 +1,4 @@
+extern unsigned int g_xbox_contig_size;   /* xboxrecomp kernel.h: the contiguous window (uint32_t), 64 MB unless RECOMP_CONTIG_MB */
 /* Quick save / quick load (save states).
  *
  * Safe point: the entry of EXBaseApp::Update (0x1B97B0), reached once per
@@ -161,7 +162,7 @@ static int list_regions(XboxSnapRegion *r, int max)
 static uint32_t g32(uint32_t va)
 {
     uint32_t v = 0;
-    if ((va && va < QS_RAM - 4) || (va >= 0x80000000u && va < 0x84000000u - 4))
+    if ((va && va < QS_RAM - 4) || (va >= 0x80000000u && va < (0x80000000u + g_xbox_contig_size) - 4))
         memcpy(&v, (uint8_t *)xbox_GetMemoryOffset() + va, 4);
     return v;
 }
@@ -300,6 +301,10 @@ static void do_save(void)
         else snprintf(m, sizeof m, "Saved to slot %d", st->slot_no);
         note(m);
         fprintf(stderr, "[QS] %.1f MB, %d host regions\n", total / 1048576.0, st->nreg);
+        if (getenv("CJ_QS_REGIONS")) {   /* the file's region order and sizes, for tools/qs_scan.py */
+            int k;
+            for (k = 0; k < st->nreg; k++) fprintf(stderr, "[QSREG] %d %s %zu\n", k, st->reg[k].name, st->reg[k].n);
+        }
     }
 }
 

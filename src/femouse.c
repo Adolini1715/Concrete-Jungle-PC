@@ -1,3 +1,4 @@
+extern unsigned int g_xbox_contig_size;   /* xboxrecomp kernel.h: the contiguous window (uint32_t), 64 MB unless RECOMP_CONTIG_MB */
 /*
  * Mouse in the menus (CJ_MENU_MOUSE=0 turns it off).
  *
@@ -17,6 +18,9 @@
  * (cj_pad_inject).
  */
 #include <stdint.h>
+#ifndef CJ_ENV_ONCE   /* a setting read once per call site (getenv walks the environment each time) */
+#define CJ_ENV_ONCE(n) __extension__({ static const char *v_; static int g_; if (!g_) { v_ = getenv(n); g_ = 1; } v_; })
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,7 +98,7 @@ void femouse_prompt(uint32_t win, int x, int y, int w, int h, const char *t)
     for (i = 0; i < 16; i++) if (s_pr[i].ms && s_pr[i].x == x && s_pr[i].y == y && s_pr[i].w == w && s_pr[i].h == h) { slot = i; break; }
     if (slot < 0) for (i = 0; i < 16; i++) if (!s_pr[i].ms || (ms_since(s_pr[i].ms) > 250u && !(s_pr[i].vis_ms && ms_since(s_pr[i].vis_ms) < 500u))) { slot = i; break; }
     if (slot < 0) return;
-    if (getenv("CJ_FE_PROMPT_LOG") && !(s_pr[slot].ms && s_pr[slot].x == x && s_pr[slot].y == y && s_pr[slot].w == w))
+    if (CJ_ENV_ONCE("CJ_FE_PROMPT_LOG") && !(s_pr[slot].ms && s_pr[slot].x == x && s_pr[slot].y == y && s_pr[slot].w == w))
         fprintf(stderr, "[PROMPT] new box %d,%d %dx%d button %x (t=%u) \"%.40s\"\n", x, y, w, h, b, now, t);
     s_pr[slot].x = x; s_pr[slot].y = y; s_pr[slot].w = w; s_pr[slot].h = h; s_pr[slot].btn = b;
     if (s_pr[slot].win != win) s_pr[slot].vis_ms = 0;
@@ -133,7 +137,7 @@ void femouse_input(int fx, int fy, int left_down_edge, int right_down_edge, int 
             if (b & 0x100) cj_pad_inject_ana((unsigned char)(1u << (b & 0xFF)), 3);
             else cj_pad_inject((unsigned short)b, 3);
             s_prompt_click = s_click_seq;
-            if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] prompt click %d,%d -> button %x\n", fx, fy, b);
+            if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] prompt click %d,%d -> button %x\n", fx, fy, b);
         }
     }
     if (ms_since(s_menu_ms) > 1500u) return;   /* no list taking input lately */
@@ -203,7 +207,7 @@ static int kb_first(void)
 void femouse_kb_keys(const Uint8 *k, int pad_a, uint16_t *dig, uint8_t ana[8])
 {
     static int held, prev_dig, logged = -2;
-    if (logged != s_sel && getenv("CJ_MENU_MOUSE_LOG")) { fprintf(stderr, "[FEMOUSE] sel %d -> %d (t=%u)\n", logged, s_sel, SDL_GetTicks()); logged = s_sel; }
+    if (logged != s_sel && CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) { fprintf(stderr, "[FEMOUSE] sel %d -> %d (t=%u)\n", logged, s_sel, SDL_GetTicks()); logged = s_sel; }
     int act = k[SDL_SCANCODE_RETURN] || k[SDL_SCANCODE_KP_ENTER] || k[SDL_SCANCODE_SPACE] || pad_a;
     int edge = *dig & ~prev_dig, sel = s_sel;
     prev_dig = *dig;
@@ -219,23 +223,23 @@ void femouse_kb_keys(const Uint8 *k, int pad_a, uint16_t *dig, uint8_t ana[8])
         if (!quiet) quiet_since = 0;
         else if (!quiet_since) quiet_since = SDL_GetTicks() | 1u;
         if (gone || (quiet && SDL_GetTicks() - quiet_since > 1500u)) {
-            if (s_sel >= 0 && getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] list closed (menu %d visible %d)\n", !quiet, !gone);
+            if (s_sel >= 0 && CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] list closed (menu %d visible %d)\n", !quiet, !gone);
             s_sel = -1; held = act; return;
         }
         if (quiet) { held = act; return; }
     }
-    if (getenv("CJ_MENU_MOUSE_LOG") && (edge & 0x3F)) fprintf(stderr, "[FEMOUSE] keys %02x sel %d bottom %d\n", edge & 0x3F, sel, s_at_bottom);
+    if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG") && (edge & 0x3F)) fprintf(stderr, "[FEMOUSE] keys %02x sel %d bottom %d\n", edge & 0x3F, sel, s_at_bottom);
     if (sel < 0) {
         if ((edge & 2) && s_at_bottom) {
             s_sel = kb_first();
             *dig &= (uint16_t)~2;
-            if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] into the list: cell %d\n", s_sel);
+            if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] into the list: cell %d\n", s_sel);
         }
         held = act;
         return;
     }
     if (!cjmod_kb_focusable(sel)) {
-        if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] cell %d not focusable\n", sel);
+        if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] cell %d not focusable\n", sel);
         s_sel = -1; return;
     }
     if (edge & 0x2F) s_hover_on = 0;   /* the arrows or Back move the selection now, not the resting pointer */
@@ -255,7 +259,7 @@ static uint8_t *M(void) { extern void *xbox_GetMemoryOffset(void); return (uint8
 /* Guest reads and writes for object fields: a pointer outside RAM (a list freed as its menu
  * closes, read in the same frame) gives 0 instead of faulting. Going back to the main menu from
  * the pause menu crashed here, reading an item at 0xFE000000. */
-static int ok_va(uint32_t va) { return va >= 0x10000u && va <= 0x84000000u - 4u; }
+static int ok_va(uint32_t va) { return va >= 0x10000u && va <= (0x80000000u + g_xbox_contig_size) - 4u; }
 static uint32_t rd32(uint32_t va) { uint32_t v; if (!ok_va(va)) return 0; memcpy(&v, M() + va, 4); return v; }
 static int32_t rds(uint32_t va) { return (int32_t)rd32(va); }
 static uint8_t rd8(uint32_t va) { return ok_va(va) ? ((uint8_t *)M())[va] : 0; }
@@ -361,7 +365,7 @@ static int trophy_mouse(uint32_t list, uint32_t n, int px, int py, int moved, in
     if (!mgr) return 0;
     {   /* calibration log (CJ_MENU_MOUSE_LOG): every exhibit's grid cell and world position, every 5 s */
         static unsigned last;
-        if (getenv("CJ_MENU_MOUSE_LOG") && ms_since(last) > 5000u) {
+        if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG") && ms_since(last) > 5000u) {
             uint32_t cnt = rd32(VA_TROPHY_N);
             last = SDL_GetTicks();
             if (cnt > 58u) cnt = 58u;
@@ -400,7 +404,7 @@ static int trophy_mouse(uint32_t list, uint32_t n, int px, int py, int moved, in
         uint32_t b = slot_box_at(px, py);
         if (b) { best = b; bd = 0; }
     }
-    if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[TROPHY] click %d,%d -> %x (current %x, substate %u)\n", px, py, best, cur, rd32(mgr + 0x408u));
+    if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[TROPHY] click %d,%d -> %x (current %x, substate %u)\n", px, py, best, cur, rd32(mgr + 0x408u));
     if (!best || bd > 45 * 45) return 1;                       /* not near a slot */
     if (rd32(mgr + 0x408u) != 1u) return 1;                    /* moving or showing one: wait */
     if (best != cur) {
@@ -464,7 +468,7 @@ void femouse_listener(uint32_t L)
     {   static unsigned checked;
         if (ms_since(checked) > 100u) { checked = SDL_GetTicks(); prompts_check(); }
     }
-    if (getenv("CJ_MENU_MOUSE_LOG")) {
+    if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) {
         static unsigned last, calls;
         calls++;
         if (SDL_GetTicks() - last > 2000u) {
@@ -489,7 +493,7 @@ void femouse_listener(uint32_t L)
     }
     {   /* the HUD's own lists update in play: not a menu, unless the weapon selector is open */
         uint32_t wnd = rd32(owner + 0x10u);
-        if (getenv("CJ_MENU_MOUSE_LOG")) {
+        if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) {
             static unsigned t; static uint32_t lw;
             if (wnd != lw || ms_since(t) > 3000u) { t = SDL_GetTicks(); lw = wnd; fprintf(stderr, "[FEMOUSE] listener %08x window %08x vt %08x selector %d\n", L, wnd, wnd ? rd32(wnd) : 0, wnd ? rd8(wnd + 0xB90u) : -1); }
         }
@@ -507,7 +511,7 @@ void femouse_listener(uint32_t L)
         recomp_lookup(VA_GETCHILDREN)();
         g_esp = sp; g_eax = e0; g_ecx = c0; g_edx = d0;
         s_at_bottom = rd32(cnt) == 0;
-        if (getenv("CJ_MENU_MOUSE_LOG")) { static int was = -1; if (was != s_at_bottom) { was = s_at_bottom; fprintf(stderr, "[FEMOUSE] at bottom %d (focus %08x)\n", was, focus); } }
+        if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) { static int was = -1; if (was != s_at_bottom) { was = s_at_bottom; fprintf(stderr, "[FEMOUSE] at bottom %d (focus %08x)\n", was, focus); } }
     }
     unsigned now = SDL_GetTicks(), mv = s_move_seq, ck = s_click_seq;
     if (now - s_menu_ms > 1500u) { seen_move = mv; s_click_taken = ck; }   /* a menu just opened: the parked cursor picks nothing */
@@ -557,7 +561,7 @@ void femouse_listener(uint32_t L)
     g_esp = esp0;
     uint32_t gc_ret = g_eax;
     uint32_t n = rd32(np);
-    if (getenv("CJ_MENU_MOUSE_LOG"))
+    if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG"))
         fprintf(stderr, "[FEMOUSE] GetChildren ret=%u n=%u owner=%08x vt=%08x st=%08x focus=%08x vt=%08x st=%08x parent=%08x\n",
                 gc_ret, n, owner, rd32(owner), rd32(owner + 0x70u), focus, rd32(focus), rd32(focus + 0x70u), rd32(focus + 8u));
     if (n > 0x100u) n = 0;
@@ -593,7 +597,7 @@ void femouse_listener(uint32_t L)
             ly = ri[1];
             if (vis[i] == focus) fi = i;
         }
-        if (click && getenv("CJ_MENU_MOUSE_LOG")) {
+        if (click && CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) {
             fprintf(stderr, "[FEMOUSE] weapon selector list (rows %d, focus %d) click %d,%d:", rows, fi, px, py);
             for (int i = 0; i < nv; i++) { int ri[4]; obj_rect(vis[i], ri); fprintf(stderr, " [%d,%d %dx%d]", ri[0], ri[1], ri[2], ri[3]); }
             fprintf(stderr, "\n");
@@ -606,7 +610,7 @@ void femouse_listener(uint32_t L)
                     int rel = px - ri[0], w = ri[2];
                     ti = i;
                     s_ws_arrow = rel >= w - 48 ? 1 : rel >= w - 74 ? -1 : 0;
-                    if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] weapon selector click row %d (now %d) rel %d of %d\n", ti, fi, rel, w);
+                    if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[FEMOUSE] weapon selector click row %d (now %d) rel %d of %d\n", ti, fi, rel, w);
                 }
             }
             if (ti >= 0) { s_ws_target = ti; s_ws_ms = 0; }
@@ -665,7 +669,7 @@ void femouse_listener(uint32_t L)
             if (r[1] > bt || (r[1] == bt && dx < bdx)) { bt = r[1]; bdx = dx; hit = o; }
         }
     }
-    if (getenv("CJ_MENU_MOUSE_LOG")) {
+    if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) {
         fprintf(stderr, "[FEMOUSE] L=%08x n=%u cursor=%d,%d hit=%08x%s\n", L, n, px, py, hit, click ? " click" : "");
         for (uint32_t i = 0; i < n && i < 24; i++) {
             int r[4]; obj_rect(rd32(list + i * 4u), r);

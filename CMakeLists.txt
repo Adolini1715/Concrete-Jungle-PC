@@ -89,7 +89,7 @@ option(CJ_DET_FILE "gen dir wraps FileThreadWakeUp (CJ_DET synchronous file I/O)
 # pointers, wrapping arithmetic, this == NULL checks. GCC and clang exploit the
 # UB differently, so turn those optimisations off for both.
 set_source_files_properties(${SWAP_SOURCES} PROPERTIES COMPILE_OPTIONS "-fno-strict-aliasing;-fwrapv;-fno-delete-null-pointer-checks")
-add_executable(pcj src/main.c src/recomp_manual.c src/determinism.c src/det_file.c src/femouse.c src/native_gfx.c src/native_dsound.c src/mods_archive.c src/cj_rec.c src/gl_backend.c src/gamelog.c src/async_io.c src/frame_pacer.c src/prof.c src/fast_emutls.c src/cj_pad.c src/texpack.c src/textpack.c src/glyphs.c src/keymap.c src/focusdiag.c src/pcsettings.c src/quicksave.c src/cutscene_ai.c ${SWAP_SOURCES} ${RECOMP_GEN_SOURCES})
+add_executable(pcj src/main.c src/recomp_manual.c src/determinism.c src/det_file.c src/femouse.c src/native_gfx.c src/native_dsound.c src/mods_archive.c src/cj_rec.c src/gl_backend.c src/frame_rec.c src/shader_cache.c src/viewer_mode.c src/gamelog.c src/async_io.c src/frame_pacer.c src/prof.c src/fast_emutls.c src/cj_pad.c src/texpack.c src/textpack.c src/glyphs.c src/keymap.c src/focusdiag.c src/pcsettings.c src/quicksave.c src/cutscene_ai.c ${SWAP_SOURCES} ${RECOMP_GEN_SOURCES})
 target_compile_definitions(pcj PRIVATE _GNU_SOURCE)
 if(NOT CJ_DET_FILE)
   target_compile_definitions(pcj PRIVATE CJ_NO_FILE_WRAP)
@@ -102,15 +102,25 @@ if(WIN32)
   target_link_libraries(pcj PRIVATE xboxrecomp
     ${CJ_WIN_DEPS}/sdl2/lib/libSDL2.dll.a ${CJ_WIN_DEPS}/epoxy/lib/libepoxy.dll.a
     opengl32 winmm dbghelp psapi shell32 ole32 pthread)
-  target_link_options(pcj PRIVATE -static-libgcc -static-libstdc++ -Wl,--stack,8388608 -Wl,--wrap=xa2_init
+  target_link_options(pcj PRIVATE -static-libgcc -static-libstdc++ -Wl,--stack,8388608 -Wl,--wrap=xa2_init -Wl,--wrap=m_D3DDevice_SetScissors_002EEA50
     # a normal Windows app: no console window (the log goes to pcj-log.txt; PCJ_LOG=- opens a console)
     -Wl,--subsystem,windows)
+  # launcher.exe (launcher/launcher.c): Play / Update / Settings / Texture packs / Report a problem
+  add_executable(launcher WIN32 launcher/launcher.c)
+  target_include_directories(launcher PRIVATE ${CJ_WIN_DEPS}/sdl2/include)
+  target_link_libraries(launcher PRIVATE mingw32 ${CJ_WIN_DEPS}/sdl2/lib/libSDL2main.a
+    ${CJ_WIN_DEPS}/sdl2/lib/libSDL2.dll.a shell32 ole32)
+  target_link_options(launcher PRIVATE -static-libgcc)
 else()
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(CJ_GLDEPS REQUIRED sdl2 epoxy)
   target_include_directories(pcj PRIVATE ${CJ_GLDEPS_INCLUDE_DIRS})
   target_link_libraries(pcj PRIVATE xboxrecomp m pthread dl ${CJ_GLDEPS_LINK_LIBRARIES})
-  target_link_options(pcj PRIVATE -rdynamic -no-pie)
+  target_link_options(pcj PRIVATE -rdynamic -no-pie -Wl,--wrap=m_D3DDevice_SetScissors_002EEA50)
+  # launcher (Linux / Steam Deck): the same launcher/launcher.c, Play execs PCJ-Linux.sh / pcj-linux
+  add_executable(launcher launcher/launcher.c)
+  target_include_directories(launcher PRIVATE ${CJ_GLDEPS_INCLUDE_DIRS})
+  target_link_libraries(launcher PRIVATE ${CJ_GLDEPS_LINK_LIBRARIES} m)
 endif()
 # src/cj_pad.c: XAPI pad wrappers (CJ_PAD_SCRIPT); all callers are in another TU than the bodies
 foreach(f m_XGetDevices_0037F68C m_XInputOpen_0037FBED m_XInputClose_0037FC43 m_XInputGetState_0037FE27 m_XInputSetState_0037FE9A)
@@ -133,7 +143,7 @@ target_include_directories(pcj PRIVATE src src/native src/recomp ${RECOMP_GEN_DI
 # Build id recorded in session recordings (src/cj_rec.c): the commit at configure time.
 execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 OUTPUT_VARIABLE CJ_GIT_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-set_source_files_properties(src/cj_rec.c PROPERTIES COMPILE_DEFINITIONS "CJ_BUILD_ID=\"${CJ_GIT_SHA}\"")
+set_source_files_properties(src/cj_rec.c src/native_gfx.c PROPERTIES COMPILE_DEFINITIONS "CJ_BUILD_ID=\"${CJ_GIT_SHA}\"")
 
 # The same libm on every platform (third_party/openlibm-cj, FreeBSD msun via OpenLibm):
 # sin, cos, tan, sincos, atan2, log2, expm1 (the recompiled x87 code) and the float

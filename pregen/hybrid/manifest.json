@@ -2252,5 +2252,31 @@
   "native": "cjn_000fc300",
   "keep": [],
   "mod": true
+ },
+ {
+  "va": "000d2200",
+  "name": "FEHud::UpdateBossBar",
+  "unit": "FEHud",
+  "thiscall": true,
+  "arg_words": 0,
+  "pop": 4,
+  "ret": "void",
+  "this_size": 1024,
+  "native": "cjn_000d2200",
+  "keep": [],
+  "mod": true
+ },
+ {
+  "va": "002c48a0",
+  "name": "EXAudio_Fader::FaderEndUpdate",
+  "unit": "EXAudioBase",
+  "thiscall": true,
+  "arg_words": 1,
+  "pop": 8,
+  "ret": "void",
+  "this_size": 16,
+  "native": "cjn_002c48a0",
+  "keep": [],
+  "mod": true
  }
 ]

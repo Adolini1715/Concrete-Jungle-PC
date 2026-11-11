@@ -26,9 +26,11 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 GAME_IN = os.path.join(REPO, "PUT YOUR GAME HERE")
-# The game goes next to this folder, not inside it: once installed, this whole
-# folder (sources, tools, build) can be deleted.
-OUT = os.path.join(os.path.dirname(REPO), "Predator Concrete Jungle PC")
+# The game goes inside this folder, so everything stays in one place: drop a new release's files
+# over this folder (replace all) and run Install.bat again to update. v0.1 put the game next to
+# this folder; main() moves it in (OLD_OUT).
+OUT = os.path.join(REPO, "Predator Concrete Jungle PC")
+OLD_OUT = os.path.join(os.path.dirname(REPO), "Predator Concrete Jungle PC")
 
 XBE_SHA1S = {"7fbc1249c5948d638a62101cc2d23d6637b76284",   # USA retail, as on the disc
              "30a1e430892c9e472122a3a25d90a233e42b99cd"}   # the same with 3 certificate bytes changed
@@ -120,6 +122,15 @@ def run(cmd, cwd=None, env=None, quiet=False, show=None):
         fail(f"{os.path.basename(cmd[0])} stopped with exit code {p.returncode}.")
     if LOG:
         LOG.flush()
+
+
+def compile_error_line(line):
+    """The compile step shows only real errors. A compiler warning prints the source line it is
+    about underneath, and a source line holding the word "error" (an fprintf of a message,
+    ERROR_NOT_OWNER) used to come through on its own, which looked like the build had failed
+    (GitHub issue #2). Warnings stay in install-log.txt."""
+    import re
+    return bool(re.search(r"(: (fatal )?error\b|^FAILED:|\berror: |undefined reference)", line))
 
 
 def sha256(path):
@@ -266,9 +277,32 @@ def copy_tree(src, dst, skip=()):
                 cp(long_path(s), long_path(d))
 
 
+def desktop_dir():
+    """The real Desktop folder: OneDrive and folder redirection move it away from
+    %USERPROFILE%\\Desktop, so ask Windows (SHGetKnownFolderPath FOLDERID_Desktop)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import uuid
+        guid = (ctypes.c_char * 16).from_buffer_copy(uuid.UUID("B4BFCC3A-DB2C-424C-B029-7FE99A87C641").bytes_le)   # FOLDERID_Desktop
+        p = ctypes.c_wchar_p()
+        if ctypes.windll.shell32.SHGetKnownFolderPath(guid, 0, None, ctypes.byref(p)) == 0:
+            d = p.value
+            ctypes.windll.ole32.CoTaskMemFree(p)
+            if d and os.path.isdir(d):
+                return d
+    except Exception:
+        pass
+    for d in (os.path.join(os.environ.get("OneDrive", ""), "Desktop"),
+              os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")):
+        if os.environ.get("USERPROFILE") and os.path.isdir(d):
+            return d
+    return None
+
+
 def shortcut(target, workdir):
-    desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
-    if not os.path.isdir(desktop):
+    desktop = desktop_dir()
+    if not desktop:
         return None
     lnk = os.path.join(desktop, "Predator Concrete Jungle.lnk")
     ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:PCJ_LNK);"
@@ -279,6 +313,25 @@ def shortcut(target, workdir):
     except OSError:
         return None
     return lnk if r.returncode == 0 else None
+
+
+def regen_inputs_hash(src):
+    """What the recompiler step reads from this repo: the pregenerated hybrid code, the toolkit
+    patch, the pipeline scripts and the hand-written sources (their function list is the
+    --exclude-manual input). An update that changes any of them reruns the step."""
+    h = hashlib.sha1()
+    for top in ("pregen", "patches", "tools", "src", "mods"):
+        base = os.path.join(src, top)
+        for d, dirs, files in os.walk(base):
+            dirs[:] = sorted(x for x in dirs if not (top == "src" and x == "recomp"))
+            for f in sorted(files):
+                if f.endswith((".pyc", ".md", ".txt", ".bat", ".ps1")):
+                    continue
+                path = os.path.join(d, f)
+                h.update(os.path.relpath(path, src).replace("\\", "/").encode())
+                with open(path, "rb") as fh:
+                    h.update(hashlib.sha1(fh.read().replace(b"\r\n", b"\n")).digest())
+    return h.hexdigest()[:16]
 
 
 def build_root():
@@ -299,8 +352,16 @@ def main():
     global LOG
     # the build steps write their files as UTF-8 (Windows would use the ANSI code page)
     os.environ["PYTHONUTF8"] = "1"
-    os.makedirs(OUT, exist_ok=True)
     LOG = open(os.path.join(REPO, "install-log.txt"), "a", encoding="utf-8")
+    if not os.path.isdir(OUT) and os.path.isdir(OLD_OUT) and \
+            any(os.path.exists(os.path.join(OLD_OUT, f)) for f in ("pcj.exe", "save", "pcj.ini")):
+        # an install from v0.1 sits next to this folder: move it in, saves, settings and packs with it
+        say(f"Moving your installed game into this folder:\n    {OLD_OUT}\n -> {OUT}")
+        try:
+            os.rename(OLD_OUT, OUT)   # same parent folder, so same drive: a rename, nothing is copied
+        except OSError as e:
+            fail(f"could not move it ({e}). Close the game and the launcher, then run Install.bat again.")
+    os.makedirs(OUT, exist_ok=True)
     t0 = time.time()
     say("=" * 70)
     say("Predator: Concrete Jungle PC installer  " + time.strftime("%Y-%m-%d %H:%M"))
@@ -443,7 +504,7 @@ def main():
     # ---- 4. recompile -----------------------------------------------------------------
     say("\n[4/6] Recompiling default.xbe into C")
     done = os.path.join(src, "work", ".done")
-    stamp = f"{XR_REV} {DECOMP_REV} {sha1(os.path.join(src, 'game', 'default.xbe'))}"
+    stamp = f"{XR_REV} {DECOMP_REV} {sha1(os.path.join(src, 'game', 'default.xbe'))} {regen_inputs_hash(src)}"
     if not (os.path.isfile(done) and open(done).read() == stamp):
         say("  about 5 to 15 minutes, depending on the PC")
         os.makedirs(os.path.join(src, "work"), exist_ok=True)
@@ -465,14 +526,17 @@ def main():
     if not os.path.isfile(os.path.join(bdir, "CMakeCache.txt")):
         run(cfg, env=env, quiet=True)
     jobs = str(max(1, (os.cpu_count() or 2)))
-    run(["cmake", "--build", bdir, "-j", jobs, "--target", "pcj"], env=env,
-        show=lambda l: "error" in l.lower())
+    run(["cmake", "--build", bdir, "-j", jobs, "--target", "pcj", *(["launcher"] if win else [])], env=env,
+        show=compile_error_line)
 
     # ---- 6. assemble ------------------------------------------------------------------
     say("\n[6/6] Putting it together")
     exe = "pcj.exe" if win else "pcj"
     if win:
         run(["strip", "-o", os.path.join(OUT, exe), os.path.join(bdir, exe)], env=env, quiet=True)
+        run(["strip", "-o", os.path.join(OUT, "launcher.exe"), os.path.join(bdir, "launcher.exe")], env=env, quiet=True)
+        with open(os.path.join(OUT, "install-root.txt"), "w") as f:   # the launcher updates from here
+            f.write(REPO + "\n")
         for f in (os.path.join(deps, "sdl2", "bin", "SDL2.dll"), os.path.join(deps, "epoxy", "bin", "libepoxy-0.dll"),
                   os.path.join(tools, "mingw64", "bin", "libwinpthread-1.dll")):
             cp(f, OUT)
@@ -499,7 +563,14 @@ def main():
         if f.endswith(".png"):
             cp(os.path.join(rep, f), tex)
     cp(os.path.join(src, "packs", "sharp-ui", "README.txt"), tex)
-    lnk = shortcut(os.path.join(OUT, exe), OUT) if win else None
+    # the launcher's look: the game's logo and loading-screen art, read from this player's disc
+    # (tools/launcher_art.py); without it the launcher draws a plain text title
+    try:
+        subprocess.run([py, "-I", os.path.join(src, "tools", "launcher_art.py"), game_out,
+                        os.path.join(OUT, "launcher-art")], capture_output=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    lnk = shortcut(os.path.join(OUT, "launcher.exe"), OUT) if win else None
 
     mins = (time.time() - t0) / 60
     say("\n" + "=" * 70)
@@ -508,14 +579,15 @@ def main():
     if lnk:
         say("and there is a shortcut on your desktop: \"Predator Concrete Jungle\".")
     say("")
-    say(f"Your game files were copied there, so this installer folder ({os.path.basename(REPO)})")
-    say("is no longer needed. Delete it to free the space, or keep it to rebuild later.")
+    say(f"Keep this installer folder ({os.path.basename(REPO)}): the launcher's Update button")
+    say("uses it. Start the game with launcher.exe (or the desktop shortcut).")
     if not os.path.abspath(root).startswith(os.path.abspath(REPO)):
         say(f"The build folder {root} can go too.")
     say("=" * 70)
     if win:
         try:
-            os.startfile(OUT)   # show the finished game folder
+            relaunch = os.environ.get("PCJ_RELAUNCH")   # an update started from the launcher: reopen it
+            os.startfile(relaunch if relaunch and os.path.isfile(relaunch) else OUT)
         except OSError:
             pass
 

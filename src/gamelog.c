@@ -1,3 +1,4 @@
+extern unsigned int g_xbox_contig_size;   /* xboxrecomp kernel.h: the contiguous window (uint32_t), 64 MB unless RECOMP_CONTIG_MB */
 /* gamelog.c: gameplay session recorder for the PC build.
  *
  * Every run writes a folder logs/session-YYYYMMDD-HHMMSS next to pcj.exe
@@ -131,12 +132,15 @@ static const char *vision_name(int v)
 }
 
 /* ---------- output ---------- */
+static int s_focus_gap;   /* set while alt-tabbed: the next long frame is not a hitch */
 static double now(void) { return SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency(); }
 
 void gamelog_event(const char *type, const char *fmt, ...)
 {
     va_list ap;
+    static SDL_SpinLock lk;   /* events come from more than one thread; one line at a time */
     if (s_on <= 0 || !s_events) return;
+    SDL_AtomicLock(&lk);
     /* gf: the game's own frame counter (g_Stats.m_FrameCount, 0x49DB48, EXApp::MainUpdate), the same
      * field xemu_soak logs, so port and Xbox logs line up event for event */
     fprintf(s_events, "{\"t\":%.3f,\"frame\":%llu,\"gf\":%u,\"type\":\"%s\"", now() - s_t0, (unsigned long long)s_nframes,
@@ -146,6 +150,7 @@ void gamelog_event(const char *type, const char *fmt, ...)
         va_start(ap, fmt); vfprintf(s_events, fmt, ap); va_end(ap);
     }
     fputs("}\n", s_events);
+    SDL_AtomicUnlock(&lk);
 }
 
 static void request_shot(const char *reason)
@@ -274,8 +279,12 @@ static void write_session(const char *gl_vendor, const char *gl_renderer, const 
     {
         static const char *keys[] = {"CJ_GL", "CJ_GL_VSH", "CJ_WINDOW_SCALE", "CJ_FULLSCREEN", "CJ_VSYNC", "CJ_MOVIE_AUDIO",
                                      "CJ_AUDIO_XA2", "CJ_NATIVE_SWAP", "CJ_GL_WBUF", "CJ_GL_ANISO", "CJ_GL_LOD_BIAS",
-                                     "CJ_GAMELOG_SHOT_EVERY", NULL};
+                                     "CJ_GAMELOG_SHOT_EVERY", "CJ_API_TAKEOVER", "CJ_API_VERIFY", "CJ_GL_RING", "CJ_FPS",
+                                     "CJ_CHARGE_FIX", "CJ_TEST_CAPTURE", "CJ_GL_PERSIST", "CJ_PERF_TEST", NULL};
         int i;
+        {   const char *t = getenv("CJ_API_TAKEOVER");
+            fprintf(f, "renderer: %s\n", t && *t == '1' ? "native (draws from the game's own D3D calls)" : "regular (emulated GPU)");
+        }
         fprintf(f, "settings:");
         for (i = 0; keys[i]; i++) if (getenv(keys[i])) fprintf(f, " %s=%s", keys[i], getenv(keys[i]));
         fprintf(f, "\n");
@@ -313,6 +322,10 @@ void gamelog_init(const char *gl_vendor, const char *gl_renderer, const char *gl
         struct tm *lt = localtime(&t);
         snprintf(s_dir, sizeof s_dir, "%s" SEP "session-%04d%02d%02d-%02d%02d%02d", parent, lt->tm_year + 1900,
                  lt->tm_mon + 1, lt->tm_mday, lt->tm_hour, lt->tm_min, lt->tm_sec);
+        if ((e = getenv("CJ_PERF_TEST")) && *e >= '1' && *e <= '9') {   /* launcher Performance Tests */
+            size_t l = strlen(s_dir);
+            snprintf(s_dir + l, sizeof s_dir - l, "-test%c", *e);
+        }
     }
     MKDIR(s_dir);
     snprintf(path, sizeof path, "%s" SEP "shots", s_dir);
@@ -329,7 +342,7 @@ void gamelog_init(const char *gl_vendor, const char *gl_renderer, const char *gl
     fprintf(s_frames, "t,frame,flip,frame_ms,draws,tris,menu,menu_sub,state_depth,level_loaded,control,mission,cutscene,"
                       "player,x,y,z,speed,health,energy,cloak,cloak_state,vision,move_mode,move_submode,weapon_slot,weapon,"
                       "hand_l,hand_r,attacking,attack_state,combo,plasma_charge,holding,game_buttons,"
-                      "pad_dpad_etc,pad_a,pad_b,pad_x,pad_y,pad_black,pad_white,pad_lt,pad_rt,pad_lx,pad_ly,pad_rx,pad_ry,cam_dist,cam_target_dist,cam_angle,cam_elev,work_ms,wait_ms,present_ms\n");
+                      "pad_dpad_etc,pad_a,pad_b,pad_x,pad_y,pad_black,pad_white,pad_lt,pad_rt,pad_lx,pad_ly,pad_rx,pad_ry,cam_dist,cam_target_dist,cam_angle,cam_elev,work_ms,wait_ms,present_ms,renderer_ms,native_ms,upload_ms,swap_ms,gl_calls,gl_skipped,gl_draws,prog_sw,tex_binds,vao_sw\n");
     s_t0 = s_last_t = s_last_flush = s_last_shot = s_last_auto_shot = now();
     write_session(gl_vendor, gl_renderer, gl_version);
     gamelog_event("session_start", "");
@@ -436,6 +449,53 @@ static void anim_log_stderr(uint32_t flip)
     }
 }
 
+/* Music state, logged when it changes (stderr [MUSIC] with CJ_MUSIC_LOG=1, and a gamelog
+ * "music" event): the sound manager's current track, the start request the audio thread has
+ * not taken yet (StartMusicData), and the two music streams with their fades. */
+static void music_poll(void)
+{
+    static int on = -1;
+    static char last[256];
+    char cur[256];
+    const uint8_t *M = (const uint8_t *)xbox_GetMemoryOffset();
+    uint32_t mgr, req_start, req_hash, mhash = 0;
+    int i, n;
+    if (on < 0) on = getenv("CJ_MUSIC_LOG") && *getenv("CJ_MUSIC_LOG") == '1';
+    memcpy(&mgr, M + 0x004931BCu, 4);
+    if (mgr >= 0x10000u && mgr < (0x80000000u + g_xbox_contig_size)) memcpy(&mhash, M + mgr + 0x44u, 4);
+    memcpy(&req_start, M + 0x004EB300u, 4);
+    memcpy(&req_hash, M + 0x004EB304u, 4);
+    {
+        uint32_t au = 0; int32_t fst = 0, fvol = 0;
+        memcpy(&au, M + 0x004E6568u, 4);   /* gpEXAudio; m_MusicFader at +0x22c */
+        if (au >= 0x10000u && au < (0x80000000u + g_xbox_contig_size)) { memcpy(&fst, M + au + 0x22Cu, 4); memcpy(&fvol, M + au + 0x230u, 4); }
+        if (on && au >= 0x10000u && au < (0x80000000u + g_xbox_contig_size)) {   /* dev (CJ_MUSIC_LOG): a file named music_mute holds the music fader at 0 */
+            static int chk, muted;
+            if ((chk++ & 15) == 0) { FILE *mf = fopen("music_mute", "rb"); muted = mf != NULL; if (mf) fclose(mf); }
+            if (muted) memset((uint8_t *)M + au + 0x230u, 0, 4);
+        }
+        n = snprintf(cur, sizeof cur, "\"mgr_hash\":\"%08x\",\"req\":%u,\"req_hash\":\"%08x\",\"fader\":[%d,%d]", mhash, req_start,
+                     req_hash, fst, fvol / 100000);
+    }
+    for (i = 0; i < 2 && n < (int)sizeof cur - 80; i++) {
+        uint32_t b = 0x004EC018u + (uint32_t)i * 0x524u;
+        int32_t st, h, fs, fv, ko;
+        memcpy(&st, M + b + 0x40u, 4); memcpy(&h, M + b + 0x38u, 4); memcpy(&fs, M + b + 0x14u, 4);
+        memcpy(&fv, M + b + 0x18u, 4); memcpy(&ko, M + b + 0x8Cu, 4);
+        {
+            int32_t pa, vo, pl, pos;
+            memcpy(&pa, M + b + 0x60u, 4); memcpy(&vo, M + b + 0x68u, 4); memcpy(&pl, M + b + 0x80u, 4); memcpy(&pos, M + b + 0x08u, 4);
+            n += snprintf(cur + n, sizeof cur - n, ",\"s%d\":[%d,\"%x\",%d,%d,%d,%d,%d,%d,\"p%d v%d pl%d at%dk\"]", i, st, (unsigned)h, fs,
+                          fv / 100000, M[b + 0x20u], M[b + 0x22u], M[b + 0x29u], ko, pa, vo, pl, pos >> 16);
+        }
+    }
+    if (strcmp(cur, last)) {
+        strcpy(last, cur);
+        if (on) { extern uint32_t s_wav_bytes; fprintf(stderr, "[MUSIC] wav=%.2fs %s\n", s_wav_bytes / 192000.0, cur); }
+        gamelog_event("music", "%s", cur);
+    }
+}
+
 void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, const void *pad_v)
 {
     static GState last;
@@ -446,6 +506,7 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
     GState s;
     double t, dt_ms;
     anim_log_stderr(flip);
+    music_poll();
     if (s_on <= 0) return;
     t = now();
     dt_ms = (t - s_last_t) * 1000.0;
@@ -473,6 +534,12 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
     }
 
     float cam[4];
+    double st_be, st_to, st_up, st_sw; unsigned st_calls, st_skip;
+    {   extern void cj_gl_frame_stages(double *, double *, double *, double *, unsigned *, unsigned *);
+        cj_gl_frame_stages(&st_be, &st_to, &st_up, &st_sw, &st_calls, &st_skip); }
+    unsigned ch_draw, ch_prog, ch_tex, ch_vao;
+    {   extern void cj_gl_frame_changes(unsigned *, unsigned *, unsigned *, unsigned *);
+        cj_gl_frame_changes(&ch_draw, &ch_prog, &ch_tex, &ch_vao); }
     /* frame-time statistics (skip the first frame) */
     if (s_nframes > 1) {
         int b = dt_ms >= HB - 1 ? HB - 1 : (int)dt_ms;
@@ -482,8 +549,10 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
         static double ema = 33.0;           /* typical frame time; a hitch is a spike above it */
         int spike = dt_ms > 100.0 && dt_ms > 3.0 * ema;
         ema = ema * 0.95 + (dt_ms < 1000.0 ? dt_ms : 1000.0) * 0.05;
+        if (s_focus_gap) { s_focus_gap = 0; spike = 0; }   /* the game waits while the window is in the background */
         if (spike && s_nframes > 30) {
             s_nhitch++;
+            {   extern void prof_spike(double ms, unsigned frame); prof_spike(dt_ms, (unsigned)s_nframes); }
             gamelog_event("hitch", "\"ms\":%.1f,\"level_loaded\":%u,\"cutscene\":%u", dt_ms, s.level, s.cut);
         }
         if (s.level && s.mission < 64) s_time_level[s.mission] += dt_ms / 1000.0;
@@ -501,7 +570,7 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
         else cam[0] = cam[1] = cam[2] = cam[3] = 0.0f;
     }
     fprintf(s_frames, "%.4f,%llu,%u,%.2f,%llu,%llu,%s,%u,%u,%u,%u,%u,%u,%d,%.3f,%.3f,%.3f,%.4f,%.2f,%.2f,%d,%d,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%d,%08X,"
-                      "%04X,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%d,%d,%.2f,%.2f,%.3f,%.3f,%.2f,%.2f,%.2f\n",
+                      "%04X,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%d,%d,%.2f,%.2f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u,%u\n",
             t - s_t0, (unsigned long long)s_nframes, flip, dt_ms, (unsigned long long)(draws_total - d_last),
             (unsigned long long)(tris_total - t_last), fe_name(s.fe), s.fe_sub, s.gs_depth, s.level, s.control, s.mission,
             s.cut, s.have_player, s.x, s.y, s.z, s.speed, s.health, s.energy, s.cloak, s.cloak_state,
@@ -510,7 +579,8 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
             pad ? pad->dig : 0, pad ? pad->ana[0] : 0, pad ? pad->ana[1] : 0, pad ? pad->ana[2] : 0,
             pad ? pad->ana[3] : 0, pad ? pad->ana[4] : 0, pad ? pad->ana[5] : 0, pad ? pad->ana[6] : 0,
             pad ? pad->ana[7] : 0, pad ? pad->lx : 0, pad ? pad->ly : 0, pad ? pad->rx : 0, pad ? pad->ry : 0,
-            cam[0], cam[1], cam[2], cam[3], cj_pace_work_ms(), cj_pace_wait_ms(), cj_pace_present_ms());
+            cam[0], cam[1], cam[2], cam[3], cj_pace_work_ms(), cj_pace_wait_ms(), cj_pace_present_ms(),
+            st_be, st_to, st_up, st_sw, st_calls, st_skip, ch_draw, ch_prog, ch_tex, ch_vao);
     d_last = draws_total; t_last = tris_total;
 
     /* events from state changes */
@@ -675,7 +745,7 @@ void gamelog_sdl_event(const void *ev_v)
         }
     }
     if (ev->type == SDL_WINDOWEVENT) {
-        if (ev->window.event == SDL_WINDOWEVENT_FOCUS_LOST) gamelog_event("focus_lost", "");
+        if (ev->window.event == SDL_WINDOWEVENT_FOCUS_LOST) { gamelog_event("focus_lost", ""); s_focus_gap = 1; }
         else if (ev->window.event == SDL_WINDOWEVENT_FOCUS_GAINED) gamelog_event("focus_gained", "");
         else if (ev->window.event == SDL_WINDOWEVENT_MINIMIZED) gamelog_event("minimized", "");
         else if (ev->window.event == SDL_WINDOWEVENT_RESTORED) gamelog_event("restored", "");

@@ -75,12 +75,49 @@ extern void cj_gl_register_env(void);
  * rate is a frame-rate problem on Windows. Counted by a first handler that
  * always passes the exception on. */
 volatile LONG64 cj_exc_av, cj_exc_ss, cj_exc_other;
+/* CJ_FAULT_CENSUS=1: also count them by host instruction (module offset) and guest address, and print
+ * the table every 30 s: which recompiled code takes the trapped-register faults, so the hottest can
+ * become direct calls instead of exceptions. */
+#define FC_N 512
+typedef struct { volatile LONG64 n; uint64_t rip; uint32_t va; uint32_t kind; } FcEnt;
+static FcEnt s_fc[FC_N];
+static int s_fc_on = -1;
+static void fc_note(uint64_t rip, uint32_t va, uint32_t kind)
+{
+    uint32_t h = (uint32_t)((rip * 0x9E3779B97F4A7C15ull) >> 40) ^ va * 2654435761u ^ kind, i, k;
+    for (k = 0; k < 16; k++) {
+        i = (h + k) & (FC_N - 1);
+        if (s_fc[i].n && (s_fc[i].rip != rip || s_fc[i].va != va || s_fc[i].kind != kind)) continue;
+        if (!s_fc[i].n) { s_fc[i].rip = rip; s_fc[i].va = va; s_fc[i].kind = kind; }
+        InterlockedIncrement64(&s_fc[i].n);
+        return;
+    }
+}
+void cj_fault_census_dump(void)
+{
+    int i, j, idx[FC_N], m = 0;
+    uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
+    if (s_fc_on != 1) return;
+    for (i = 0; i < FC_N; i++) if (s_fc[i].n) idx[m++] = i;
+    for (i = 0; i < m; i++) for (j = i + 1; j < m; j++) if (s_fc[idx[j]].n > s_fc[idx[i]].n) { int t = idx[i]; idx[i] = idx[j]; idx[j] = t; }
+    fprintf(stderr, "[FAULTS] census: %d sites (kind 0 = access, 1 = single step; rip as pcj.exe offset)\n", m);
+    for (i = 0; i < m && i < 40; i++)
+        fprintf(stderr, "[FAULTS] %8lld kind %u rip +0x%llX guest va %08X\n", (long long)s_fc[idx[i]].n, s_fc[idx[i]].kind,
+                (unsigned long long)(s_fc[idx[i]].rip - base), s_fc[idx[i]].va);
+}
 static LONG CALLBACK veh_count(PEXCEPTION_POINTERS ep)
 {
     DWORD c = ep->ExceptionRecord->ExceptionCode;
     if (c == EXCEPTION_ACCESS_VIOLATION) InterlockedIncrement64(&cj_exc_av);
     else if (c == EXCEPTION_SINGLE_STEP) InterlockedIncrement64(&cj_exc_ss);
     else InterlockedIncrement64(&cj_exc_other);
+    if (s_fc_on < 0) { const char *e = getenv("CJ_FAULT_CENSUS"); s_fc_on = e && *e == '1'; }
+    if (s_fc_on == 1 && (c == EXCEPTION_ACCESS_VIOLATION || c == EXCEPTION_SINGLE_STEP)) {
+        uint32_t va = 0;
+        if (c == EXCEPTION_ACCESS_VIOLATION)
+            va = (uint32_t)((uintptr_t)ep->ExceptionRecord->ExceptionInformation[1] - (uintptr_t)g_xbox_mem_offset);
+        fc_note((uint64_t)ep->ContextRecord->Rip, va, c == EXCEPTION_SINGLE_STEP);
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -173,17 +210,6 @@ static void env_default(const char *k, const char *v)
     if (!getenv(k)) _putenv_s(k, v);
 }
 
-/* Settings the Linux run.sh exports, plus the PC defaults (docs/windows-build.md). */
-static void pc_defaults(void)
-{
-    env_default("RECOMP_AC97_READY", "1");
-    env_default("RECOMP_TITLE_KEVENTS", "1");
-    env_default("RECOMP_VBLANK", "paced");   /* the 60 Hz schedule; "1" is the old ~40 Hz tick */
-    env_default("RECOMP_PB_EXEC", "1");
-    env_default("CJ_GL", "1");
-    env_default("CJ_PAD_HOST", "1");
-}
-
 /* The toolkit's APU tries XAudio2 first, then waveOut. Wine's XAudio2
  * (FAudio) faults inside CreateMasteringVoice when the host has no audio
  * device, so skip it then (and on CJ_AUDIO_XA2=0); linked with
@@ -263,7 +289,98 @@ static void crash_handler(int sig, siginfo_t *si, void *ucv)
         _exit(128 + sig);
     }
 }
+
+/* pcj.ini next to the binary, as on Windows (the launcher writes it; the Deck test folder shares one
+ * between the Proton and the Linux builds): game=, save= and any other KEY=VALUE as an environment
+ * variable unless already set. A Windows game= / save= path (X:\...) is ignored here. */
+#ifndef MAX_PATH
+#define MAX_PATH 4096
 #endif
+#include <strings.h>
+static char s_exe_dir[MAX_PATH];
+static char s_ini_game[MAX_PATH], s_ini_save[MAX_PATH];
+static void trim(char *t)
+{
+    size_t n = strlen(t);
+    while (n && (t[n - 1] == '\r' || t[n - 1] == '\n' || t[n - 1] == ' ' || t[n - 1] == '\t' || t[n - 1] == '"'))
+        t[--n] = 0;
+    while (*t == ' ' || *t == '\t' || *t == '"') memmove(t, t + 1, strlen(t));
+}
+static void load_ini(void)
+{
+    char path[MAX_PATH + 16], line[1024];
+    FILE *f;
+    snprintf(path, sizeof path, "%s/pcj.ini", s_exe_dir);
+    if (!(f = fopen(path, "r"))) return;
+    while (fgets(line, sizeof line, f)) {
+        char *eq, *k = line, *v;
+        trim(k);
+        if (!*k || *k == '#' || *k == ';' || *k == '[') continue;
+        if (!(eq = strchr(k, '='))) continue;
+        *eq = 0; v = eq + 1;
+        trim(k); trim(v);
+        if (!strcasecmp(k, "game")) { if (v[0] == '/') snprintf(s_ini_game, sizeof s_ini_game, "%s", v); }
+        else if (!strcasecmp(k, "save")) { if (v[0] == '/') snprintf(s_ini_save, sizeof s_ini_save, "%s", v); }
+        else if (!getenv(k)) setenv(k, v, 0);
+    }
+    fclose(f);
+    fprintf(stderr, "[PC] read %s\n", path);
+}
+static void env_default(const char *k, const char *v) { setenv(k, v, 0); }
+static int dir_has_xbe(const char *d)
+{
+    char p[MAX_PATH + 32];
+    snprintf(p, sizeof p, "%s/DEFAULT.XBE", d);
+    if (access(p, R_OK) == 0) return 1;
+    snprintf(p, sizeof p, "%s/default.xbe", d);
+    return access(p, R_OK) == 0;
+}
+#endif
+
+#ifdef _WIN32
+int cj_on_wine(void)   /* Wine / Proton: ntdll exports wine_get_version */
+{
+    static int w = -1;
+    if (w < 0) {
+        HMODULE nt = GetModuleHandleA("ntdll.dll");
+        w = nt && GetProcAddress(nt, "wine_get_version") != NULL;
+    }
+    return w;
+}
+#endif
+
+/* The PC defaults (both platforms; docs/windows-build.md). */
+static void pc_defaults(void)
+{
+    env_default("RECOMP_AC97_READY", "1");
+    env_default("RECOMP_TITLE_KEVENTS", "1");
+    env_default("RECOMP_VBLANK", "paced");   /* the 60 Hz schedule; "1" is the old ~40 Hz tick */
+    env_default("RECOMP_PB_EXEC", "1");
+    env_default("CJ_GL", "1");
+    env_default("CJ_PAD_HOST", "1");
+    /* Compatibility mode (launcher, CJ_SAFE_RENDER=1): Patch 1's renderer and executor speedups off,
+     * back to the paths v0.1 shipped with, for a PC whose driver misdraws with them. Each switch can
+     * still be set on its own. */
+    {   const char *sr = getenv("CJ_SAFE_RENDER");
+        if (sr && *sr == '1') {
+            env_default("CJ_GL_FILTER", "0");       /* redundant-state filter, sampler cache */
+            env_default("CJ_GL_PERSIST", "0");      /* persistent-mapped streaming rings */
+            env_default("RECOMP_RAW_VERTS", "0");   /* raw vertex upload */
+            env_default("RECOMP_PB_RUNS", "0");     /* bulk pushbuffer runs */
+            env_default("RECOMP_BULK_FETCH", "0");  /* bulk vertex fetch */
+            env_default("CJ_TEX_ASYNC", "0");       /* background texture-pack decode */
+            env_default("CJ_ZETA_SMALL", "0");      /* depth readback shrunk on the GPU */
+            fprintf(stderr, "[PC] compatibility mode: renderer speedups off\n");
+        }
+    }
+    /* Stop the APU's sample-limit tick once audio is up (xboxrecomp apu_core.c): with the GP DSP
+     * stubbed it fired ~23 times a second and DirectSound answered each with HandleDeltaPanic, about
+     * 40 trapped-register exceptions (~1,050 a second, every exception the game took in a level).
+     * The first 200 ticks (~9 s) cover DirectSound's start-up, which waits on it. Only with the game's
+     * own mixer (the default): CJ_DSOUND=0 plays through the emulated chip, which keeps the tick. */
+    {   const char *ds = getenv("CJ_DSOUND");
+        if (!(ds && *ds == '0')) env_default("RECOMP_APU_SSL_MAX", "200"); }
+}
 
 static void *load_file(const char *path, size_t *size)
 {
@@ -380,8 +497,33 @@ int main(int argc, char **argv)
 
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+    {   /* the binary's folder: pcj.ini, game/ and save/ next to it (as on Windows) */
+        static char game_buf[MAX_PATH + 8], save_buf2[MAX_PATH + 8];
+        ssize_t n = readlink("/proc/self/exe", s_exe_dir, sizeof s_exe_dir - 1);
+        char *sl;
+        if (n > 0) { s_exe_dir[n] = 0; if ((sl = strrchr(s_exe_dir, '/'))) *sl = 0; }
+        else snprintf(s_exe_dir, sizeof s_exe_dir, ".");
+        if (!game_dir && chdir(s_exe_dir) != 0)   /* packaged layout: logs/, textures/, shadercache/ next to the binary, as on Windows */
+            fprintf(stderr, "[PC] cannot enter %s\n", s_exe_dir);
+        load_ini();
+        {   extern void pcs_set_ini_path(const char *);
+            char ini[MAX_PATH + 16];
+            snprintf(ini, sizeof ini, "%s/pcj.ini", s_exe_dir);
+            pcs_set_ini_path(ini); }
+        pc_defaults();
+        {   extern void cj_gl_register_env(void); cj_gl_register_env(); }   /* CJ_GL from pcj.ini / the defaults */
+        if (!game_dir && s_ini_game[0]) game_dir = s_ini_game;
+        snprintf(game_buf, sizeof game_buf, "%s/game", s_exe_dir);
+        if (!game_dir && dir_has_xbe(game_buf)) game_dir = game_buf;
+        if (!save_dir && s_ini_save[0]) save_dir = s_ini_save;
+        if (!save_dir && game_dir == game_buf) {
+            snprintf(save_buf2, sizeof save_buf2, "%s/save", s_exe_dir);
+            mkdir(save_buf2, 0755);
+            save_dir = save_buf2;
+        }
+    }
     if (!game_dir) {
-        fprintf(stderr, "usage: %s <extracted disc dir> [save dir]\n", argv[0]);
+        fprintf(stderr, "usage: %s <extracted disc dir> [save dir] (or a game/ folder next to it)\n", argv[0]);
         return 2;
     }
 #endif
@@ -404,6 +546,17 @@ int main(int argc, char **argv)
     printf("XBE loaded: %llu bytes\n", (unsigned long long)xbe_size);
 
     { void prof_start(void); prof_start(); }   /* src/prof.c: sampling profiler, CJ_PROF=0 off */
+    {   /* CJ_RAM_MB=128 (pcj.ini): a dev-kit sized contiguous window, where the game's heaps and
+         * graphics memory live (xboxrecomp RECOMP_CONTIG_MB); the game's heap grows to match below */
+        const char *r = getenv("CJ_RAM_MB");
+        if (r && *r && !getenv("RECOMP_CONTIG_MB")) {
+#ifdef _WIN32
+            char kv[64]; snprintf(kv, sizeof kv, "RECOMP_CONTIG_MB=%s", r); _putenv(kv);
+#else
+            setenv("RECOMP_CONTIG_MB", r, 1);
+#endif
+        }
+    }
     if (!xbox_MemoryLayoutInit(xbe, xbe_size)) {
         fprintf(stderr, "[FATAL] xbox_MemoryLayoutInit failed: could not reserve/map the Xbox memory window\n"
                         "        (guest RAM + mirrors). The lines above say which mapping failed.\n");
@@ -415,6 +568,26 @@ int main(int argc, char **argv)
     }
     g_xbox_mem_offset = xbox_GetMemoryOffset();
     printf("Xbox memory mapped, offset 0x%llX\n", (unsigned long long)g_xbox_mem_offset);
+    {   /* CJ_REPLAY=<dir>: draw a recorded frame set (src/frame_rec.c) and exit; no game. */
+        int cj_frame_replay(void);
+        if (cj_frame_replay()) { fflush(stderr); fflush(stdout); return 0; }
+    }
+    {   /* A bigger window (CJ_RAM_MB): give the extra to the game's Large Data heap, where levels,
+         * models and textures load. EngineX sizes its two heaps at boot from the globals
+         * _SDataHeapSize (0x00396BD4, 8 MB) and _LDataHeapSize (0x00396BD8, 36 MB) in
+         * _initalize_heap_memory (XBMalloc.obj), carving them from contiguous memory. */
+        extern uint32_t g_xbox_contig_size;
+        uint32_t extra = g_xbox_contig_size > (64u << 20) ? g_xbox_contig_size - (64u << 20) : 0;
+        if (extra) {
+            volatile uint32_t *ld = (volatile uint32_t *)((uint8_t *)g_xbox_mem_offset + 0x00396BD8u);
+            if (*ld == 0x2400000u) {
+                *ld += extra;
+                fprintf(stderr, "[MEM] %u MB contiguous window: Large Data heap 36 MB -> %u MB\n",
+                        g_xbox_contig_size >> 20, *ld >> 20);
+            } else
+                fprintf(stderr, "[MEM] Large Data heap size is %08X, not the retail value: left alone\n", *ld);
+        }
+    }
 
     /* CJ_NULLHW=1: the XDK D3D library's own no-GPU mode (D3D__NullHardware,
      * BSS 0x00307D70). After its first real KickOff (which the executor still

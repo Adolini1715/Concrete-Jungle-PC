@@ -103,7 +103,7 @@ def main():
                         time.sleep(3)
                         press('stop', 'a')
                         last_press = time.time()
-                elif phase == 'menu' and fe == 'Loaded':
+                elif phase == 'menu' and fe == 'Loaded' and not os.environ.get('ROUTE_PASSIVE'):   # ROUTE_PASSIVE=1: leave the hub to the caller
                     # hub: Training, Chapter Select, Ritual Challenges, Records,
                     # Hunting Gear, Costume Select, Trophies, Options, Save Game;
                     # after New Game the cursor is on Training
@@ -123,9 +123,13 @@ def main():
                 elif phase == 'hub' and fe == 'Story_Level_Select':
                     phase = 'select'
                     time.sleep(3)
+                    # ROUTE_CHAPTER_KEYS=down,down: moves on the chapter list before A
+                    for k in filter(None, os.environ.get('ROUTE_CHAPTER_KEYS', '').split(',')):
+                        press(k); time.sleep(1.5)
+                    open(os.path.join(rd, 'dump-now'), 'w').close(); time.sleep(2)
                     press('a')
                     last_press = time.time()
-                elif phase in ('select', 'hub') and fe == 'Done':
+                elif phase in ('select', 'hub') and (fe == 'Done' or (phase == 'select' and fe == '-')):   # a loaded save goes straight to '-'
                     phase = 'loading'
                     lost_ctl = st['ctl'] == 0
                     print('MILESTONE level load at flip %d (%.0fs)' % (flip, time.time() - t0), flush=True)
@@ -141,15 +145,23 @@ def main():
             now = time.time()
             if os.environ.get('ROUTE_BOOT_START') and phase == 'boot' and now - last_press > 4:
                 press('start'); last_press = now   # ROUTE_NO_REPEAT=1 ROUTE_BOOT_START=1: Start only until the main menu
+            load = os.environ.get('ROUTE_LOAD')   # ROUTE_LOAD=1: Load Game (the save in the save dir) instead of New Game
             if until != 'menu' and phase == 'menu' and st.get('fe') == 'Main' and now - last_press > 20:
-                press('a'); last_press = now
-            if until != 'menu' and phase == 'menu' and st.get('fe') == 'New_Game' and st.get('sub') == 13 and now - last_press > 6:
+                if load: press('down'); time.sleep(1.5)
+                press('a'); last_press = time.time()
+            if load and phase == 'menu' and st.get('fe') == 'New_Game' and now - last_press > 6:
+                press('b'); last_press = time.time()
+            if load and phase == 'menu' and st.get('fe') == 'Load_Game' and now - last_press > 6:
+                press('a'); last_press = time.time()
+            if until != 'menu' and not load and phase == 'menu' and st.get('fe') == 'New_Game' and st.get('sub') == 13 and now - last_press > 6:
                 # "Previous saved game will be lost. Overwrite?" defaults to No
                 press('up'); time.sleep(1.5); press('a'); last_press = time.time()
-            elif until != 'menu' and phase == 'menu' and st.get('fe', '').startswith('New_Game') and now - last_press > 8:
+            elif until != 'menu' and not load and phase == 'menu' and st.get('fe', '').startswith('New_Game') and now - last_press > 8:
                 press('a'); last_press = now
             if phase == 'hub' and st.get('fe') == 'Loaded' and now - last_press > 25:
                 press('down'); time.sleep(2); press('a'); last_press = time.time()
+            if load and phase == 'loading' and now - last_press > 15:
+                press('a'); last_press = now   # a chapter's intro movie can stall under Wine; A skips it
             if phase == 'level' and skip and now - last_press > 8 and (skip_for is None or flip < goal_flip + skip_for):
                 # the mission intro is an in-engine cutscene; A skips its lines
                 press('a'); last_press = now
@@ -159,6 +171,9 @@ def main():
                     if pa[1] == 'dump':
                         open(os.path.join(rd, 'dump-now'), 'w').close()
                         print('  dump trigger at flip %d' % flip, flush=True)
+                    elif pa[1] == 'rec' and os.environ.get('CJ_FRAME_REC'):   # src/frame_rec.c: start recording
+                        open(os.path.join(os.environ['CJ_FRAME_REC'], 'go'), 'w').close()
+                        print('  record trigger at flip %d' % flip, flush=True)
                     else:
                         press(pa[1])
             if goal_flip is not None and flip >= goal_flip + after:

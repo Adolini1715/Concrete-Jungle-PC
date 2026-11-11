@@ -26,9 +26,10 @@ the game, and the built game reads your own disc files when it runs.
   menu with five slots per chapter.
 - **Sharp UI, built in**: the fonts, menu frames, buttons, radar and HUD redrawn by hand at
   4x, crisp at any resolution. On by default.
-- **Texture packs**: drop folders or .zip packs into `textures/`; F3 toggles them in play.
-  HD packs for Scarface, his weapons and the alternate costumes (Jungle Hunter and City Hunter
-  so far) are released separately.
+- **A launcher**: Play, one-click updates, PC settings, texture packs and problem reports.
+- **Texture packs**: download the HD packs (Scarface, his weapons and gear, and the alternate
+  costumes) from the launcher, or drop folders or .zip packs into `textures/`; F3 toggles them
+  in play.
 - **Options > PC Settings** inside the game's own menus.
 - **Menu fixes**: a Quit Game option, PC wording for the save messages, menu letters no longer
   clipped (an off-by-one in the game's font data), even letter spacing, and both Controller
@@ -37,7 +38,8 @@ the game, and the built game reads your own disc files when it runs.
   flicker; F12 saves a screenshot.
 
 For the full list of changes, the bugs fixed, and the work behind them, see
-[docs/what-changed.md](docs/what-changed.md).
+[docs/what-changed.md](docs/what-changed.md). What the latest update changed:
+[docs/patch-1.md](docs/patch-1.md).
 
 ## Installing on Windows
 
@@ -58,12 +60,22 @@ a pinned SHA-256 or git commit), the recompiler toolkit
 your `default.xbe` is the release it supports, recompiles it and compiles `pcj.exe`. The first
 run takes a while (see the window for progress); if it stops, run it again and it carries on.
 
-When it is done, the game is in a **`Predator Concrete Jungle PC`** folder next to the one you
-unzipped (for example `C:\Games\Predator Concrete Jungle PC`), with your game files copied into
-it, and there is a desktop shortcut. The unzipped folder is then no longer needed and can be
-deleted. Nothing is installed on the system and no administrator rights are needed (the build
+When it is done, the game is in a **`Predator Concrete Jungle PC`** folder inside the one you
+unzipped (for example `C:\Games\PCJ\Predator Concrete Jungle PC`), with your game files copied
+into it, and there is a desktop shortcut to the launcher. **Keep the unzipped folder**: updates
+use it. Nothing is installed on the system and no administrator rights are needed (the build
 happens inside the unzipped folder, or in `C:\PCJ-build` when its path is long or has a space in
-it). To uninstall, delete the game folder.
+it). To uninstall, delete the folder.
+
+## Updating
+
+Open the launcher and choose **Update** (or run `Update.bat`). It fetches the latest release,
+keeps your saves, settings, texture packs and disc, and rebuilds only what changed.
+
+Coming from v0.1, which had no updater: download the new release zip, drag everything in it into
+the folder you unzipped v0.1 into, choose Replace for every file, and run `Install.bat`. See
+[docs/patch-1.md](docs/patch-1.md) for what changed, and note that quick saves and pause-menu
+saves do not carry over to a new version (chapter progress does).
 
 ## Getting your game files
 
@@ -92,10 +104,14 @@ The result is `dist/PCJ-PC/` with `pcj.exe` for Windows; `--linux` also builds a
 
 ## Playing
 
-Start the game from the desktop shortcut, or run `pcj.exe` in the `Predator Concrete Jungle PC`
-folder. It finds the game files in its `game` folder (a `pcj.exe` built with `build.sh` asks for
-the folder the first time and remembers it in `pcj.ini`). See `dist/pkgsrc/README-PC.txt` for
-keys and settings.
+Start the launcher from the desktop shortcut, or run `launcher.exe` in the
+`Predator Concrete Jungle PC` folder: Play, Update, PC Settings, Texture Packs (HD packs download
+from there) and Report a Problem. `pcj.exe` still starts the game directly. It finds the game
+files in its `game` folder (a `pcj.exe` built with `build.sh` asks for the folder the first time
+and remembers it in `pcj.ini`). See `dist/pkgsrc/README-PC.txt` for keys and settings.
+
+If anything draws wrong or runs worse than before, turn on **Compatibility mode** in the
+launcher's PC Settings.
 
 ## How it works
 
@@ -116,7 +132,8 @@ Link to HD Textures: https://archive.org/details/pcj-scarface-hd-pack
 ## Known issues
 
 - Only the USA retail release is supported.
-- HD textures cover Scarface, his weapons, Jungle Hunter and City Hunter so far.
+- Quick saves and pause-menu saves only load in the version that made them.
+- The experimental native renderer has been checked in the first chapters only.
 
 ## Credits
 

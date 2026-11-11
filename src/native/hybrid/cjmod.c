@@ -1,5 +1,8 @@
 /* Native helpers for mods (see src/native/hybrid/cjmod.h, mods/README.md). */
 #include "cjmod.h"
+#ifndef CJ_ENV_ONCE   /* a setting read once per call site (getenv walks the environment each time) */
+#define CJ_ENV_ONCE(n) __extension__({ static const char *v_; static int g_; if (!g_) { v_ = getenv(n); g_ = 1; } v_; })
+#endif
 
 int cjmod_ticks30(unsigned int frame, float mul)
 {
@@ -285,7 +288,7 @@ void cjmod_kb_cell(int k, char *obj)
     if (k < 0 || k >= CTRL_KB) return;
     va = obj ? (uint32_t)((uint8_t *)obj - (uint8_t *)xbox_GetMemoryOffset()) : 0;
     if (s_cell[k] != va) {
-        if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[KBLIST] cell %d object %08x -> %08x (t=%u)\n", k, s_cell[k], va, SDL_GetTicks());
+        if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[KBLIST] cell %d object %08x -> %08x (t=%u)\n", k, s_cell[k], va, SDL_GetTicks());
         s_cell[k] = va; s_lit[k] = -1;
     }
     s_cells_ms = SDL_GetTicks() | 1u;
@@ -300,7 +303,7 @@ int cjmod_kb_relight(int k)
     if (k < 0 || k >= CTRL_KB) return 0;
     want = femouse_kb_sel() == k;
     if (s_lit[k] == want) return 0;
-    if (getenv("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[KBLIST] cell %d %s (was %d, t=%u)\n", k, want ? "lit" : "plain", s_lit[k], SDL_GetTicks());
+    if (CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG")) fprintf(stderr, "[KBLIST] cell %d %s (was %d, t=%u)\n", k, want ? "lit" : "plain", s_lit[k], SDL_GetTicks());
     s_lit[k] = (signed char)want;
     return want ? 2 : 1;
 }

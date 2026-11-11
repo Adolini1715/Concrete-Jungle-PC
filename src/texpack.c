@@ -27,6 +27,12 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <pthread.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(p) _mkdir(p)
@@ -45,7 +51,9 @@ static int s_init, s_dump, s_repl;
 static char s_dir[512];
 
 /* A replacement: a loose PNG (zoff < 0) or a member of a zip (zoff = local header offset). */
-typedef struct { uint64_t key; char *path; long zoff; int order; uint8_t *rgba; int w, h, tried; } Repl;
+/* state: 0 not started, 1 queued, 2 decoding, 3 done (rgba set, or NULL if unreadable). Workers write
+ * rgba/w/h, then publish state 3 (release); the game thread reads state (acquire) before them. */
+typedef struct { uint64_t key; char *path; long zoff; int order; uint8_t *rgba; int w, h, state, urgent; } Repl;
 static Repl *s_rp;
 static int s_nrp;
 static uint64_t *s_dumped;          /* open-addressed set of dumped keys */
@@ -180,7 +188,7 @@ static void scan_replace(const char *dir, int depth)   /* depth: folders below t
     while ((de = readdir(d))) {
         char **m;
         if (de->d_name[0] == '.') continue;
-        if (!depth && (!strcmp(de->d_name, "dump") || !strcmp(de->d_name, "glyphs"))) continue;
+        if (!depth && (!strcmp(de->d_name, "dump") || !strcmp(de->d_name, "glyphs") || !strcmp(de->d_name, "disabled"))) continue;   /* disabled: packs the launcher switched off */
         if (!(m = realloc(names, (size_t)(nn + 1) * sizeof *names))) break;
         names = m;
         names[nn++] = strdup(de->d_name);
@@ -248,6 +256,7 @@ out:
     return out;
 }
 
+static void async_start(void);
 static void texpack_init(void)
 {
     const char *e;
@@ -274,6 +283,7 @@ static void texpack_init(void)
         s_nrp = o;
         if (s_nrp) fprintf(stderr, "[TEXPACK] %d replacement textures from %d pack(s) in %s\n", s_nrp, s_npacks, s_dir);
         else s_repl = 0;
+        if (s_repl) async_start();
     }
     (void)sub;
 }
@@ -367,31 +377,134 @@ const uint8_t *texpack_find(uint64_t key, int *w, int *h)
     return p ? p : builtin_find(key, w, h);
 }
 
-static const uint8_t *pack_find(uint64_t key, int *w, int *h)
+/* Decoding pack PNGs on the game thread stalled it 50-300 ms the first time each replacement was
+ * drawn (level loads on the Deck). Worker threads decode them instead: every replacement is queued
+ * when the packs are scanned (prefetch, up to CJ_TEX_PREFETCH_MB of decoded pixels, default 2048),
+ * and one the game asks for before it is ready jumps the queue while the game draws the original
+ * texture; src/gl_backend.c swaps the replacement in once it is done (texpack_ready).
+ * CJ_TEX_ASYNC=0: decode on the game thread at first use, as before. */
+static pthread_mutex_t s_qm = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t s_qc = PTHREAD_COND_INITIALIZER;
+static int *s_q, s_qh, s_qt, s_qcap;    /* ring of Repl indices (each queued at most once) */
+static int s_async = -1, s_nwork;
+static size_t s_prefetch_bytes, s_prefetch_cap;
+static void repl_decode(Repl *r)
+{
+    int c, w = 0, h = 0;
+    uint8_t *px;
+    if (r->zoff >= 0) {
+        int len = 0;
+        uint8_t *png = zip_member(r->path, r->zoff, &len);
+        px = png ? stbi_load_from_memory(png, len, &w, &h, &c, 4) : NULL;
+        free(png);
+    } else
+        px = stbi_load(r->path, &w, &h, &c, 4);
+    if (!px) fprintf(stderr, "[TEXPACK] cannot read %s: %s\n", r->path, stbi_failure_reason());
+    r->w = w; r->h = h; r->rgba = px;
+    __atomic_store_n(&r->state, 3, __ATOMIC_RELEASE);
+}
+static void *decode_worker(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        int i;
+        pthread_mutex_lock(&s_qm);
+        while (s_qh == s_qt) pthread_cond_wait(&s_qc, &s_qm);
+        i = s_q[s_qh]; s_qh = (s_qh + 1) % s_qcap;
+        if (__atomic_load_n(&s_rp[i].state, __ATOMIC_ACQUIRE) != 1) { pthread_mutex_unlock(&s_qm); continue; }
+        if (!s_rp[i].urgent && s_prefetch_bytes >= s_prefetch_cap) {   /* prefetch budget spent: back to on demand */
+            s_rp[i].state = 0;
+            pthread_mutex_unlock(&s_qm);
+            continue;
+        }
+        __atomic_store_n(&s_rp[i].state, 2, __ATOMIC_RELAXED);
+        pthread_mutex_unlock(&s_qm);
+        repl_decode(&s_rp[i]);
+        pthread_mutex_lock(&s_qm);
+        s_prefetch_bytes += (size_t)s_rp[i].w * s_rp[i].h * 4;
+        pthread_mutex_unlock(&s_qm);
+    }
+    return NULL;
+}
+static int cpu_count(void)
+{
+#ifdef _WIN32
+    SYSTEM_INFO si; GetSystemInfo(&si); return (int)si.dwNumberOfProcessors;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1;
+#endif
+}
+/* queue s_rp[i]: at the back (prefetch) or the front (the game wants it now) */
+static void enqueue(int i, int front)
+{
+    pthread_mutex_lock(&s_qm);
+    if (front) {
+        if (s_rp[i].urgent) { pthread_mutex_unlock(&s_qm); return; }
+        s_rp[i].urgent = 1;
+    }
+    if (s_rp[i].state == 0) {
+        s_rp[i].state = 1;
+        if (front) { s_qh = (s_qh + s_qcap - 1) % s_qcap; s_q[s_qh] = i; }
+        else { s_q[s_qt] = i; s_qt = (s_qt + 1) % s_qcap; }
+        pthread_cond_signal(&s_qc);
+    } else if (front && s_rp[i].state == 1) {   /* already queued for prefetch: queue it again up front (the
+                                                   worker skips the stale entry when it reaches it) */
+        s_qh = (s_qh + s_qcap - 1) % s_qcap; s_q[s_qh] = i;
+        pthread_cond_signal(&s_qc);
+    }
+    pthread_mutex_unlock(&s_qm);
+}
+static void async_start(void)
+{
+    const char *e = getenv("CJ_TEX_ASYNC");
+    int i, n;
+    s_async = !(e && *e == '0') && s_nrp > 0;
+    if (!s_async) return;
+    s_qcap = s_nrp * 2 + 2;   /* each index at most twice: once for prefetch, once up front */
+    if (!(s_q = malloc((size_t)s_qcap * sizeof *s_q))) { s_async = 0; return; }
+    n = cpu_count() - 2;
+    if (n < 1) n = 1;
+    if (n > 4) n = 4;
+    for (i = 0; i < n; i++) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, decode_worker, NULL) == 0) { pthread_detach(t); s_nwork++; }
+    }
+    if (!s_nwork) { s_async = 0; return; }
+    e = getenv("CJ_TEX_PREFETCH_MB");
+    s_prefetch_cap = (size_t)(e && *e ? atoi(e) : 2048) << 20;
+    for (i = 0; i < s_nrp; i++) enqueue(i, 0);   /* prefetch; the workers stop at the budget (decode_worker) */
+    fprintf(stderr, "[TEXPACK] decoding %d replacements on %d thread(s) (CJ_TEX_ASYNC=0: at first use)\n", s_nrp, s_nwork);
+}
+static int repl_index(uint64_t key)
 {
     int lo = 0, hi = s_nrp - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        Repl *r = &s_rp[mid];
-        if (r->key == key) {
-            if (!r->tried) {
-                int c;
-                r->tried = 1;
-                if (r->zoff >= 0) {
-                    int len = 0;
-                    uint8_t *png = zip_member(r->path, r->zoff, &len);
-                    r->rgba = png ? stbi_load_from_memory(png, len, &r->w, &r->h, &c, 4) : NULL;
-                    free(png);
-                } else
-                    r->rgba = stbi_load(r->path, &r->w, &r->h, &c, 4);
-                if (!r->rgba) fprintf(stderr, "[TEXPACK] cannot read %s: %s\n", r->path, stbi_failure_reason());
-                else { s_nrepl_used++; fprintf(stderr, "[TEXPACK] using %s (%dx%d)\n", r->path, r->w, r->h); }
-            }
-            if (!r->rgba) return NULL;
-            *w = r->w; *h = r->h;
-            return r->rgba;
-        }
-        if (r->key < key) lo = mid + 1; else hi = mid - 1;
+        if (s_rp[mid].key == key) return mid;
+        if (s_rp[mid].key < key) lo = mid + 1; else hi = mid - 1;
     }
-    return NULL;
+    return -1;
+}
+/* 1: a replacement for `key` exists but is still decoding (the caller draws the original for now) */
+int texpack_pending(uint64_t key)
+{
+    int i;
+    if (!s_repl || s_off || s_async <= 0) return 0;
+    if ((i = repl_index(key)) < 0) return 0;
+    return __atomic_load_n(&s_rp[i].state, __ATOMIC_ACQUIRE) != 3;
+}
+static const uint8_t *pack_find(uint64_t key, int *w, int *h)
+{
+    int i = repl_index(key);
+    Repl *r;
+    if (i < 0) return NULL;
+    r = &s_rp[i];
+    if (s_async > 0) {
+        if (__atomic_load_n(&r->state, __ATOMIC_ACQUIRE) != 3) { enqueue(i, 1); return NULL; }
+    } else if (r->state != 3) repl_decode(r);
+    if (!r->rgba) return NULL;
+    if (!r->w) return NULL;
+    if (r->state == 3 && r->order >= 0) { r->order = -1; s_nrepl_used++; fprintf(stderr, "[TEXPACK] using %s (%dx%d)\n", r->path, r->w, r->h); }
+    *w = r->w; *h = r->h;
+    return r->rgba;
 }

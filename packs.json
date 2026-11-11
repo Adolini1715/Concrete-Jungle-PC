@@ -1,0 +1,38 @@
+{
+  "about": "HD texture packs the launcher offers (Texture Packs > Available to download). Packs are hosted outside GitHub; each entry lists one or more download links, tried in order, and the file's SHA-1.",
+  "packs": [
+    {
+      "id": "scarface",
+      "name": "Scarface HD",
+      "about": "The default Predator in HD, plus the Jungle Hunter costume and the costume faces",
+      "file": "pcj-scarface-hd-pack.zip",
+      "size": 52595636,
+      "sha1": "4c8191a7be1e32814122997ecd663af93a754b7a",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-scarface-hd-pack.zip"
+      ]
+    },
+    {
+      "id": "weapons",
+      "name": "Weapons and Gear HD",
+      "about": "The Predator's weapons and hunting gear in HD",
+      "file": "pcj-weapons-hd-pack.zip",
+      "size": 21292332,
+      "sha1": "7109e435dd4d5cb792aa139e0f1708c2fc88ee7b",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-weapons-hd-pack.zip"
+      ]
+    },
+    {
+      "id": "city-hunter",
+      "name": "City Hunter HD",
+      "about": "The City Hunter costume in HD",
+      "file": "pcj-city-hunter-hd.zip",
+      "size": 10960700,
+      "sha1": "24fd25fbe91f29ead968ab833603e1c656ae1624",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-city-hunter-hd.zip"
+      ]
+    }
+  ]
+}

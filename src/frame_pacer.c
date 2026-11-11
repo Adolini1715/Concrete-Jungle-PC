@@ -1,3 +1,4 @@
+extern unsigned int g_xbox_contig_size;   /* xboxrecomp kernel.h: the contiguous window (uint32_t), 64 MB unless RECOMP_CONTIG_MB */
 /* Frame pacing at Swap (CJ_PACE, default on; docs/frame-pacing.md).
  *
  * How EngineX paces by itself: the main loop calls EXApp::MainUpdate over
@@ -163,7 +164,7 @@ void cj_pace_after_swap(void)
         vb = (uint32_t)floor(el * 60.0 + 0.5);
         if (vb < vmin) vb = vmin;
         if (vb > 4) vb = 4;                            /* MainUpdate skips a frame whose rate is <= 1 */
-        if (disp >= 0x10000u && disp < 0x84000000u - 0x1000u) {
+        if (disp >= 0x10000u && disp < (0x80000000u + g_xbox_contig_size) - 0x1000u) {
             *(volatile uint32_t *)(mem + disp + DISPLAY_VBLANKS) = vb;   /* the running total stays the kernel's */
         }
         s_next = t_present + 1.0 / (double)c;         /* from the actual present: no catch-up */

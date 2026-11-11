@@ -16,6 +16,9 @@
  * bound to another button swaps with it.
  */
 #include <stdio.h>
+#ifndef CJ_ENV_ONCE   /* a setting read once per call site (getenv walks the environment each time) */
+#define CJ_ENV_ONCE(n) __extension__({ static const char *v_; static int g_; if (!g_) { v_ = getenv(n); g_ = 1; } v_; })
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <SDL2/SDL.h>
@@ -153,6 +156,10 @@ int keymap_event(const SDL_Event *ev)
     if (ev->type == SDL_KEYDOWN && !ev->key.repeat) {
         if (ev->key.keysym.scancode == SDL_SCANCODE_ESCAPE) { s_capture = -1; armed_ms = 0; return 1; }
         c = ev->key.keysym.scancode;
+    } else if (ev->type == SDL_MOUSEBUTTONDOWN && ev->button.button == SDL_BUTTON_LEFT) {
+        /* a left click is the menu mouse: clicking away cancels (it used to bind "Mouse Left" to whatever
+         * cell was waiting, and a few stray clicks scrambled the bindings) */
+        s_capture = -1; armed_ms = 0; return 1;
     } else if (ev->type == SDL_MOUSEBUTTONDOWN) {
         c = ev->button.button == SDL_BUTTON_LEFT ? KM_MOUSE_LEFT : ev->button.button == SDL_BUTTON_RIGHT ? KM_MOUSE_RIGHT
           : ev->button.button == SDL_BUTTON_MIDDLE ? KM_MOUSE_MIDDLE : -1;
@@ -220,6 +227,11 @@ void keymap_pad(const Uint8 *k, int menu, int wheel, uint16_t *dig, uint8_t ana[
     if (wheel < 0) s_wheel_down_hold = 3;
     for (i = 0; i < KM_N; i++) {
         int c = s_bind[map[i].slot], on = 0;
+        /* In a menu the fixed menu keys (arrows, Enter, Esc, Backspace) only do their menu job. A binding
+         * on one of them (Enter on RT: the pause menu's next tab; Down on Start) must not fire too. */
+        if (menu && (c == SDL_SCANCODE_UP || c == SDL_SCANCODE_DOWN || c == SDL_SCANCODE_LEFT || c == SDL_SCANCODE_RIGHT ||
+                     c == SDL_SCANCODE_RETURN || c == SDL_SCANCODE_KP_ENTER || c == SDL_SCANCODE_ESCAPE || c == SDL_SCANCODE_BACKSPACE))
+            continue;
         if (c > 0 && c < SDL_NUM_SCANCODES) on = k[c] != 0;
         else if (!menu) {
             if (c == KM_MOUSE_LEFT) on = (mb & SDL_BUTTON_LMASK) != 0;
@@ -246,7 +258,7 @@ void keymap_pad(const Uint8 *k, int menu, int wheel, uint16_t *dig, uint8_t ana[
     {   static int was;
         int lvl = in_level(), back = !lvl || dialog_open();
         if (k[SDL_SCANCODE_ESCAPE]) *dig |= back ? 0x20 : 0x10;
-        if (k[SDL_SCANCODE_ESCAPE] && !was && getenv("CJ_MENU_MOUSE_LOG"))
+        if (k[SDL_SCANCODE_ESCAPE] && !was && CJ_ENV_ONCE("CJ_MENU_MOUSE_LOG"))
             fprintf(stderr, "[KEYS] Esc: menu %d in_level %d -> %s\n", menu, lvl, back ? "Back" : "Start");
         was = k[SDL_SCANCODE_ESCAPE];
     }

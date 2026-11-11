@@ -59,7 +59,7 @@ static volatile uint32_t s_cursor;           /* samples, mod RING_SAMPLES */
 static volatile uint64_t s_consumed;
 static float s_vol[NCH] = {1, 1, 1, 1, 1};
 static FILE *s_wav;
-static uint32_t s_wav_bytes;
+uint32_t s_wav_bytes;   /* gamelog music_poll prints it (CJ_DSOUND_WAV timing) */
 static unsigned s_created;
 
 static int is_ours(uint32_t h) { return s_on > 0 && h >= HANDLE_BASE && h < HANDLE_BASE + NCH; }
@@ -219,7 +219,7 @@ void sub_002B23E0(void)
         sub_002B23E0_gen();
         return;
     }
-    memset(XBOX_PTR(RING_VA + ch * RING_BYTES), 0, RING_BYTES);
+    memset((void *)XBOX_PTR(RING_VA + ch * RING_BYTES), 0, RING_BYTES);
     {   /* the mix-bin table the original leaves behind (xbAudioDSS_SetMixBins reads it) */
         uint32_t esp0 = g_esp, ecx0 = g_ecx;
         PUSH32(g_esp, ch == 4);

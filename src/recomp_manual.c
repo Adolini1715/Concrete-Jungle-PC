@@ -19,6 +19,9 @@
  */
 
 #include <stdio.h>
+#ifndef CJ_ENV_ONCE   /* a setting read once per call site (getenv walks the environment each time) */
+#define CJ_ENV_ONCE(n) __extension__({ static const char *v_; static int g_; if (!g_) { v_ = getenv(n); g_ = 1; } v_; })
+#endif
 #include <stdint.h>
 #include <string.h>
 #include <stddef.h>   /* ptrdiff_t */
@@ -378,6 +381,30 @@ static float prompt_fit_scale(uint32_t self, uint32_t tp, uint32_t rp, float sca
     }
 }
 
+/* The width of a line of text in box units: the glyph advances at this scale, and a button icon
+ * as 1.5 font heights. */
+static float text_plain_width(uint32_t self, uint32_t tp, float scale)
+{
+    uint8_t *M = (uint8_t *)xbox_GetMemoryOffset();
+    float w = 0.0f;
+    uint32_t f = MEM32(self + 0xA8u), page = 0;
+    int fh = fe_font_height(self);
+    if (!tp || tp >= 0x84000000u) return 0.0f;
+    if (f) { uint32_t po = MEM32(f + 4u); if (po) page = f + 4u + po; }
+    if (!(scale > 0.0f && scale < 16.0f)) scale = 1.0f;
+    for (const char *t = (const char *)(M + tp); *t && *t != '\n'; t++) {
+        unsigned char c = (unsigned char)*t;
+        if (c == '~' && t[1]) { w += (float)(fh > 0 ? fh : 16) * 1.5f * scale; t++; continue; }
+        if (page && MEM32(page + c * 4u)) {
+            uint32_t e = page + c * 4u + MEM32(page + c * 4u);
+            uint16_t gw, k;
+            memcpy(&gw, M + e + 0x10u, 2); memcpy(&k, M + e + 0x14u, 2);
+            w += (float)(gw - k) * scale;
+        }
+    }
+    return w;
+}
+
 static void fe_fontprint_rect_0010FF80(void)
 {
     uint32_t self = g_ecx, font = MEM32(self + 0x2A0u);
@@ -392,7 +419,7 @@ static void fe_fontprint_rect_0010FF80(void)
                                (int)MEM32(r + 8u), (int)MEM32(r + 12u), t);
         }
     }
-    if (getenv("CJ_FE_PROMPT_LOG")) {   /* dev: text with button icons, its rect and window origin */
+    if (CJ_ENV_ONCE("CJ_FE_PROMPT_LOG")) {   /* dev: text with button icons, its rect and window origin */
         uint32_t tp = MEM32(g_esp + 4u), r = MEM32(g_esp + 8u);
         const char *t = tp ? (const char *)((uint8_t *)xbox_GetMemoryOffset() + tp) : "";
         if (tp && strchr(t, '~') && r) {
@@ -441,6 +468,13 @@ static void fe_fontprint_rect_0010FF80(void)
         int32_t ox = 0, ow = 0;
         uint32_t align = MEM32(g_esp + 0x10u), x0 = rp ? MEM32(rp) : 0, w0 = rp ? MEM32(rp + 8u) : 0;
         int widened = text_box_fit(self, tp, rp, rdf((uint8_t *)xbox_GetMemoryOffset(), g_esp + 0xCu), &ox, &ow);
+        if (CJ_ENV_ONCE("CJ_TEXT_LOG") && tp && rp && ((const char *)((uint8_t *)xbox_GetMemoryOffset() + tp))[0] >= '0' && ((const char *)((uint8_t *)xbox_GetMemoryOffset() + tp))[0] <= '9') {
+            static unsigned n;
+            if (n++ < 400) fprintf(stderr, "[TEXTLOG] win=%08x \"%.30s\" box %d,%d %dx%d align %u scale %.2f w %.1f\n", self,
+                                   (const char *)((uint8_t *)xbox_GetMemoryOffset() + tp), (int)MEM32(rp), (int)MEM32(rp + 4u),
+                                   (int)MEM32(rp + 8u), (int)MEM32(rp + 12u), align, rdf((uint8_t *)xbox_GetMemoryOffset(), g_esp + 0xCu),
+                                   text_plain_width(self, tp, rdf((uint8_t *)xbox_GetMemoryOffset(), g_esp + 0xCu)));
+        }
         /* Right-aligned text (CalculateAlignment 6-8) ends exactly on the box's right edge, and the
          * window clips there: the last glyph's right side and its drop shadow were cut off (the
          * chapter statistics' "0/1"). Keep a few units clear of the edge. */
@@ -448,6 +482,10 @@ static void fe_fontprint_rect_0010FF80(void)
             int fh = fe_font_height(self);
             float sc = rdf((uint8_t *)xbox_GetMemoryOffset(), g_esp + 0xCu);
             int pad = (int)((float)(fh > 0 ? fh : 16) * (sc > 0.0f && sc < 16.0f ? sc : 1.0f) * 0.15f) + 2;
+            /* only where the box has plenty of room on its left: a number that fills its box (the
+             * HUD's energy count, "105") keeps the original placement, which the art is drawn for */
+            int room = (int)w0 - (int)text_plain_width(self, tp, sc) - 2;
+            if (room < 2 * pad) pad = 0;
             MEM32(rp) = MEM32(rp) - (uint32_t)pad;
         }
         recomp_lookup(0x0010FF80u)();
@@ -642,7 +680,7 @@ static void xwnd_string_props_0010E2F0(void)
     uint8_t *M = (uint8_t *)xbox_GetMemoryOffset();
     int32_t ox = 0, ow = 0;
     int widened = text_box_fit(self, tp, rp, rdf(M, g_esp + 0x14u), &ox, &ow);
-    if (getenv("CJ_FE_PROMPT_LOG") && tp && rp && strstr((const char *)(M + tp), "Navigate")) {
+    if (CJ_ENV_ONCE("CJ_FE_PROMPT_LOG") && tp && rp && strstr((const char *)(M + tp), "Navigate")) {
         static unsigned n;
         if (n++ < 6) fprintf(stderr, "[TEXT] layout \"%s\" in box %d,%d %dx%d align %u\n", (const char *)(M + tp),
                              (int)MEM32(rp), (int)MEM32(rp + 4u), (int)MEM32(rp + 8u), (int)MEM32(rp + 12u), MEM32(g_esp + 0x10u));
@@ -663,6 +701,11 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x00110180u) return fe_textsize_rect_00110180;
     recomp_func_t det = cj_det_lookup(xbox_va);
     if (det) return det;
+    {   /* CJ_VIEWER: Eurocom's model viewer instead of the game (src/viewer_mode.c) */
+        extern recomp_func_t viewer_lookup(uint32_t va);
+        recomp_func_t v = viewer_lookup(xbox_va);
+        if (v) return v;
+    }
     {   /* quick save / load safe point (src/quicksave.c) */
         extern recomp_func_t qs_lookup(uint32_t va);
         recomp_func_t q = qs_lookup(xbox_va);
@@ -1125,6 +1168,97 @@ static void cj_modern_controls_tick(uint8_t *mem)
     }
 }
 
+/* Settings keep (CJ_KEEP_SETTINGS, default on): the Options pages edit the settings block in
+ * GameData (instance 0x48E3C0: +0x18D..0x191 camera inverts, +0x198 music and +0x19C sfx volume,
+ * +0x1A0 control style, +0x1A5..0x1AB rumble and the rest, +0x1E4), which GameData::SettingsRestore
+ * (0x128D90) puts onto the camera, pad and sound. Loading a save reads the block stored in that save
+ * over it, so on a PC every quit-to-menu-and-load reset the player's controls ("my control settings
+ * keep resetting"). Once the player has changed a setting in this session, a save load that changes
+ * the block (Load_Game and 3 s after) is put back to what the player had and applied again, because
+ * LoadPost's restore already ran in that frame. Until the player changes something, loads apply the
+ * save's settings as before. */
+extern int cj_det_enabled(void);
+/* Put the GameData settings block onto the camera, sound and pad the way GameData::SettingsRestore
+ * (0x128D90, its first part) does. LoadPost runs that restore in the frame the save loads, before the
+ * keep below can put the player's block back, so it is applied again here. Game thread only. */
+static uint32_t ks_call(uint32_t va, uint32_t ecx, int n, const uint32_t *a, int callee_pops)
+{
+    uint32_t e0 = g_eax, c0 = g_ecx, d0 = g_edx, sp = g_esp, r;
+    int i;
+    for (i = n - 1; i >= 0; i--) PUSH32(g_esp, a[i]);
+    PUSH32(g_esp, 0x0000C0E1u);
+    g_ecx = ecx;
+    recomp_lookup(va)();
+    r = g_eax;
+    (void)callee_pops;
+    g_esp = sp; g_eax = e0; g_ecx = c0; g_edx = d0;
+    return r;
+}
+static void cj_settings_apply(uint8_t *mem, uint32_t gd)
+{
+    uint32_t a, cam, snd = *(uint32_t *)(mem + 0x4931BCu), pad = *(uint32_t *)(mem + 0x4931ECu), disp = *(uint32_t *)(mem + 0x49E110u);
+    a = 0; cam = ks_call(0x000C0E70u, 0, 1, &a, 0);                     /* XGetCamera(0) */
+    if (cam >= 0x10000u && cam < 0x84000000u) memcpy(mem + cam + 0x108, mem + gd + 0x18D, 5);
+    if (snd >= 0x10000u && snd < 0x84000000u) {
+        a = *(uint32_t *)(mem + gd + 0x198); ks_call(0x001AEA90u, snd, 1, &a, 1);   /* SetMusicVolume */
+        a = *(uint32_t *)(mem + gd + 0x19C); ks_call(0x001AEA60u, snd, 1, &a, 1);   /* SetSfxVolume */
+    }
+    if (pad >= 0x10000u && pad < 0x84000000u) {
+        a = *(uint32_t *)(mem + gd + 0x1A0); ks_call(0x00199C30u, pad, 1, &a, 1);   /* XGamePad::SetActions */
+        a = mem[gd + 0x1A7];                 ks_call(0x001BA120u, pad, 1, &a, 1);   /* EnableAllRumble */
+    }
+    if (disp >= 0x10000u && disp < 0x84000000u) mem[disp + 0x18] = mem[gd + 0x1AB];
+    memcpy(mem + 0x396D20u, mem + gd + 0x1E4, 4);
+    if (getenv("CJ_SETTINGS_LOG")) fprintf(stderr, "[SETTINGS] applied: camera %08X inverts %02x %02x %02x %02x %02x, pad %08X style %u\n",
+        cam, cam >= 0x10000u && cam < 0x84000000u ? mem[cam + 0x108] : 0xEE, mem[cam + 0x109], mem[cam + 0x10A], mem[cam + 0x10B], mem[cam + 0x10C],
+        pad, *(uint32_t *)(mem + gd + 0x1A0));
+}
+static const struct { uint16_t off, n; } k_keep[] = { {0x18D, 5}, {0x198, 12}, {0x1A5, 7}, {0x1E4, 4} };
+static void cj_keep_settings_tick(uint8_t *mem)
+{
+    static int on = -1, have, loads, window, dirty;   /* loads: count, for the log */
+    static uint32_t prev_st;
+    static uint8_t kept[28];
+    static unsigned nlog;
+    uint8_t cur[28];
+    uint32_t fe, m, st = 0, gd;
+    int loading, i, o;
+    if (on < 0) { const char *e = getenv("CJ_KEEP_SETTINGS"); on = !(e && *e == '0'); }
+    if (!on || cj_det_enabled()) return;
+    gd = *(volatile uint32_t *)(mem + 0x0048E3C0u);
+    if (gd < 0x10000u || gd >= 0x84000000u) return;
+    fe = *(volatile uint32_t *)(mem + 0x0048CE58u);
+    if (fe >= 0x10000u && fe < 0x84000000u && (m = *(volatile uint32_t *)(mem + fe + 0x1C0)) >= 0x10000u && m < 0x84000000u)
+        st = *(volatile uint32_t *)(mem + m + 0x404);
+    if (st == 3 && prev_st != 3) {
+        loads++;
+        if (getenv("CJ_SETTINGS_LOG")) fprintf(stderr, "[SETTINGS] save load %d starts\n", loads);
+    }
+    prev_st = st;
+    for (i = 0, o = 0; i < 4; i++) { memcpy(cur + o, mem + gd + k_keep[i].off, k_keep[i].n); o += k_keep[i].n; }
+    if (st == 3) window = 180;          /* Load_Game: a save is loading, this and the next ~3 s */
+    else if (window > 0) window--;
+    loading = st == 3 || window > 0;
+    if (!have) { memcpy(kept, cur, sizeof kept); have = 1; return; }
+    if (!memcmp(cur, kept, sizeof kept)) return;
+    if (getenv("CJ_SETTINGS_LOG")) {
+        fprintf(stderr, "[SETTINGS] st=%u loads=%d win=%d was", st, loads, window);
+        for (i = 0; i < 28; i++) fprintf(stderr, " %02x", kept[i]);
+        fprintf(stderr, "\n[SETTINGS]                     now");
+        for (i = 0; i < 28; i++) fprintf(stderr, " %02x", cur[i]);
+        fprintf(stderr, "\n");
+    }
+    if (!loading) dirty = 1;        /* the player changed a setting this session: theirs win from now on */
+    if (!loading || !dirty) {       /* the player's own change, or a load before they changed anything: take it */
+        if (getenv("CJ_SETTINGS_LOG")) fprintf(stderr, "[SETTINGS] %s\n", loading ? "a save load before any change this session: its settings apply" : "the player changed the settings");
+        memcpy(kept, cur, sizeof kept);
+        return;
+    }
+    for (i = 0, o = 0; i < 4; i++) { memcpy(mem + gd + k_keep[i].off, kept + o, k_keep[i].n); o += k_keep[i].n; }
+    cj_settings_apply(mem, gd);
+    if (nlog++ < 8) fprintf(stderr, "[SETTINGS] a save load changed the settings: kept the player's\n");
+}
+
 void cj_fps_tick(void)
 {
     static int want = -1;
@@ -1143,7 +1277,28 @@ void cj_fps_tick(void)
     cj_camera_style_tick(mem);
     cj_camera_settings_tick(mem);
     { extern void cjmod_move_tick(void); cjmod_move_tick(); }   /* CJ_GRAVITY (src/native/hybrid/cjmod_move.c) */
+    {   /* testing a bigger window (CJ_RAM_MB): creating a file named memscan_now prints how much of
+         * the contiguous window above 64 MB the game has written (EngineX fills a new heap with
+         * 0x51515151, so any other word there is data the game put there) */
+        extern unsigned int g_xbox_contig_size;
+        static unsigned scan_n;
+        if (g_xbox_contig_size > (64u << 20) && (++scan_n & 63) == 0) {
+            FILE *t = fopen("memscan_now", "rb");
+            if (t) {
+                const uint32_t *w = (const uint32_t *)(mem + 0x84000000u);
+                size_t n = (g_xbox_contig_size - (64u << 20)) / 4, i, used = 0, pages = 0;
+                fclose(t); remove("memscan_now");
+                for (i = 0; i < n; i++) if (w[i] != 0x51515151u && w[i]) used++;
+                for (i = 0; i < n; i += 1024) {
+                    size_t j; for (j = i; j < i + 1024 && j < n; j++) if (w[j] != 0x51515151u && w[j]) { pages++; break; }
+                }
+                fprintf(stderr, "[MEM] above 64 MB: %zu of %zu words hold data, %zu of %zu pages touched\n",
+                        used, n, pages, n / 1024);
+            }
+        }
+    }
     cj_modern_controls_tick(mem);
+    cj_keep_settings_tick(mem);
     { extern void cj_text_tick(void); cj_text_tick(); }
     if (want && *mx != (uint32_t)want && *mx >= 15 && *mx <= 60)
         *mx = (uint32_t)want;
