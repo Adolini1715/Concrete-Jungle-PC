@@ -15,11 +15,25 @@ faster.
 
 ## Updating from v0.1
 
-1. Download **Concrete-Jungle-PC-v0.2.0.zip** from the release page.
-2. Open the zip, select everything in it, and drag it into the folder you unzipped v0.1 into
-   (the one with `Install.bat`). Choose **Replace** for every file.
-3. Run **Install.bat**. It rebuilds only what changed and moves your v0.1 game folder, with its
-   saves, settings and texture packs, inside this folder.
+v0.1 had no updater, so this one time you bring it in yourself. Close the game first.
+
+1. Download **Update-from-v0.1.bat** from the release page.
+2. Put it in the folder you unzipped v0.1 into (the one with `Install.bat`). Your
+   `Predator Concrete Jungle PC` game folder works too.
+3. Double-click it. If Windows says it protected your PC, choose **More info**, then **Run
+   anyway**.
+
+It downloads this release, rebuilds only what changed (about 10 minutes; the build tools are
+already there) and moves your game folder, with its saves, settings and texture packs, inside the
+install folder. The desktop shortcut is replaced with one that opens the launcher.
+
+By hand, if you prefer: download **Concrete-Jungle-PC-v0.2.0.zip**, open it, drag everything in it
+into the folder you unzipped v0.1 into, choose **Replace** for every file, and run `Install.bat`.
+
+If you deleted the v0.1 install folder: unzip this release where the old one was, next to your
+`Predator Concrete Jungle PC` folder, put your disc in `PUT YOUR GAME HERE` and run `Install.bat`.
+It finds the old game folder and keeps your saves and settings. This is a full build (about an
+hour).
 
 From now on, keep that folder: **Update** in the launcher (or `Update.bat`) fetches the latest
 release and rebuilds for you.
@@ -33,7 +47,8 @@ now lives inside the folder you unzipped.
   Texture Packs, Check for Updates and Report a Problem. It is drawn with the game's own logo and
   loading-screen art, read from your disc.
 - **HD texture packs from the launcher**: Texture Packs lists the packs available to download
-  (Scarface, Weapons and Gear, City Hunter; more costumes as they are finished),
+  (Scarface, Weapons and Gear, City Hunter, Alien Hunter and Ritual; more costumes as they are
+  finished),
   one click each, checked against a known hash. Packs you already have can be switched on and off
   there.
 - **Report a Problem** collects the game's logs into one zip in the install's `logs` folder. Logs

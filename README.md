@@ -72,10 +72,10 @@ it). To uninstall, delete the folder.
 Open the launcher and choose **Update** (or run `Update.bat`). It fetches the latest release,
 keeps your saves, settings, texture packs and disc, and rebuilds only what changed.
 
-Coming from v0.1, which had no updater: download the new release zip, drag everything in it into
-the folder you unzipped v0.1 into, choose Replace for every file, and run `Install.bat`. See
-[docs/patch-1.md](docs/patch-1.md) for what changed, and note that quick saves and pause-menu
-saves do not carry over to a new version (chapter progress does).
+Coming from v0.1, which had no updater: download `Update-from-v0.1.bat` from the release page,
+put it in the folder you unzipped v0.1 into (the one with `Install.bat`) and double-click it. See
+[docs/patch-1.md](docs/patch-1.md) for the details and what changed, and note that quick saves and
+pause-menu saves do not carry over to a new version (chapter progress does).
 
 ## Getting your game files
 

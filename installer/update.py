@@ -62,11 +62,16 @@ def main():
         say(f"Could not reach GitHub ({e}). Check the internet connection and try again.")
         return 1
     tag = rel.get("tag_name", "")
+    ref = os.environ.get("PCJ_UPDATE_REF")   # testing: take this branch or tag whatever the version
+    if ref and not CHECK:
+        say(f"PCJ_UPDATE_REF: taking {ref}")
+        rel = {"zipball_url": f"https://api.github.com/repos/Adolini1715/Concrete-Jungle-PC/zipball/{ref}"}
+        tag, have = ref, "0"
     if CHECK:   # the launcher asks: print one line, change nothing
         print(f"LATEST {tag} HAVE {have} NEWER {int(version_tuple(tag) > version_tuple(have))}", flush=True)
         return 0
     say(f"Latest release: {tag}")
-    if version_tuple(tag) <= version_tuple(have):
+    if not ref and version_tuple(tag) <= version_tuple(have):
         say("You already have the latest version.")
         return 3
     url = rel.get("zipball_url")
