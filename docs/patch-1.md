@@ -70,8 +70,9 @@ now lives inside the folder you unzipped.
 - A boss's health bar shows when the boss takes damage, not only while you are locked on.
 - Rain streaks are drawn again. The renderer dropped every line the game drew, so the rain was missing
   from the title fly-in, the menu and rainy levels.
-- Quick load (F8, or LB + RB) asks first: press it a second time within a few seconds to load. One
-  accidental press no longer throws your current game away.
+- New controller buttons for quick save and quick load: hold both bumpers (LB + RB) and press d-pad
+  up to save, d-pad down to load. Clicking both sticks and pressing both bumpers alone no longer do
+  anything, so they cannot fire by accident.
 - In menus, the fixed menu keys ignore your key bindings (Enter bound to an action no longer
   switches tabs), and a left click while rebinding cancels instead of binding Mouse Left.
 - With mouse look on, a menu no longer loses the pointer while you are still using it.

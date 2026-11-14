@@ -3534,16 +3534,20 @@ static void host_input(void)
             if (!ax[i]) ax[i] = v;   /* raw: src/cj_pad.c applies the dead zone (cj_stick) */
         }
     }
-    {   /* controller quick save: click both sticks; quick load: press both bumpers (LB + RB). While a
-         * pair is held (until both are released) the game sees neither button. Back is not used: the
-         * game opens its menu on Back at once. The slot is picked in Options > PC Settings. */
-        static int sticks, bumpers;
-        int s2 = (p.dig & 0xC0) == 0xC0, s1 = (p.dig & 0xC0) != 0;
-        int b2 = p.ana[4] > 128 && p.ana[5] > 128, b1 = p.ana[4] > 128 || p.ana[5] > 128;
-        if (s2 && !sticks) { sticks = 1; qs_request(1); }
-        if (sticks) { if (!s1) sticks = 0; p.dig &= (uint16_t)~0xC0; }
-        if (b2 && !bumpers) { bumpers = 1; qs_request(2); }
-        if (bumpers) { if (!b1) bumpers = 0; p.ana[4] = p.ana[5] = 0; }
+    {   /* controller quick save / quick load: hold both bumpers (LB + RB) and press d-pad up to save,
+         * d-pad down to load. While both bumpers are held the game sees neither bumper nor d-pad up/down.
+         * The slot is picked in Options > PC Settings. */
+        static int held_up, held_down;
+        if (p.ana[4] > 128 && p.ana[5] > 128) {
+            int up = (p.dig & 0x01) != 0, down = (p.dig & 0x02) != 0;
+            if (up && !held_up) qs_request(1);
+            if (down && !held_down) qs_request(2);
+            held_up = up; held_down = down;
+            p.ana[4] = p.ana[5] = 0;
+            p.dig &= (uint16_t)~0x03;
+        } else {
+            held_up = held_down = 0;
+        }
     }
     {   /* which kind of input was used last picks the button prompts (src/glyphs.c) */
         extern void glyph_input(int kb_used, int pad_used);

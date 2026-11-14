@@ -209,7 +209,7 @@ static void note(const char *m)
 }
 
 static QsGame s_pending_game;
-/* Slots: 0 is the one quick save (F5 / F8, both sticks / both bumpers, any chapter); 1..5 are the
+/* Slots: 0 is the one quick save (F5 / F8, LB + RB + d-pad up / down, any chapter); 1..5 are the
  * pause menu's save slots, five per chapter (file names carry the chapter's map hash). s_target is
  * the slot the next save or load uses. */
 static int s_target;
@@ -710,22 +710,7 @@ static void stall_monitor(void) { pthread_t t; if (s_mon_started) return; s_mon_
 #endif
 
 static int s_req_slot;
-void qs_request(int what)   /* the quick save (F5 / F8, both sticks / both bumpers) */
-{
-    if (what == 2) {   /* a quick load throws the current game away, and LB + RB is easy to press by accident:
-                          the first press only asks, a second one within about 4 seconds loads */
-        static unsigned armed_until;
-        unsigned now = (unsigned)cj_gl_flips();
-        if (!armed_until || now > armed_until) {
-            armed_until = now + 240;
-            note("Load your quick save? Press quick load again to confirm (current progress is lost)");
-            s_msg_until = now + 240;
-            return;
-        }
-        armed_until = 0;
-    }
-    s_request = what; s_req_slot = 0;
-}
+void qs_request(int what) { s_request = what; s_req_slot = 0; }   /* the quick save (F5 / F8, LB + RB + d-pad up / down) */
 void qs_request_slot(int what, int slot) { s_request = what; s_req_slot = slot; }
 /* From the pause menu (cjmod_pause_qs): act once the menu has closed. The menu calls
  * qs_pause_alive every frame it is up; the request fires after 6 updates without it, with the

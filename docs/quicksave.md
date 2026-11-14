@@ -1,8 +1,8 @@
 # Quick save / quick load
 
-One quick save: F5 or clicking both sticks saves, F8 or pressing both bumpers
-(LB + RB) loads (saves/quicksave.pcjs). The game does not see those button
-pairs. Separately, the pause menu has Save Game / Load Game with five slots per
+One quick save: F5, or holding both bumpers (LB + RB) and pressing d-pad up, saves;
+F8, or LB + RB and d-pad down, loads (saves/quicksave.pcjs). While both bumpers are
+held the game does not see them or d-pad up/down. Separately, the pause menu has Save Game / Load Game with five slots per
 chapter (saves/chapter_<map hash>_slot<N>.pcjs; see "Pause menu" below).
 A status line at the top of the screen (drawn into the frame, so it shows in
 fullscreen) says what happened: "Quick saved", "Saved to slot 2", "Slot 3 is

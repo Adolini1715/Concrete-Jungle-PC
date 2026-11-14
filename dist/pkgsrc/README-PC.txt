@@ -36,7 +36,7 @@ DEFAULT CONTROLS (keyboard and mouse)
   Hunting Gear a click sends the lasers to a slot (click again to choose).
 
 KEYS
-  F5 / F8        quick save / quick load (press load twice: the first press asks)
+  F5 / F8        quick save / quick load (controller: hold LB + RB, d-pad up / down)
   F3             texture packs on / off (compare with the original)
   F7             frame rate 30 / 60 (also Options > PC Settings)
   F11, Alt+Enter fullscreen
