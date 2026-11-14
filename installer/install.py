@@ -525,8 +525,11 @@ def main():
         say("  already done")
 
     # ---- 5. compile -------------------------------------------------------------------
-    say("\n[5/6] Compiling pcj.exe (5 to 20 minutes)")
     bdir = os.path.join(src, "build-win" if win else "build-installer")
+    if os.path.isfile(os.path.join(bdir, "build.ninja")):
+        say("\n[5/6] Compiling pcj.exe (only what changed, usually a few minutes)")
+    else:
+        say("\n[5/6] Compiling pcj.exe (5 to 20 minutes)")
     cfg = ["cmake", "-S", src, "-B", bdir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
            f"-DPCJ_DECOMP_DIR={decomp}", f"-DCJ_HYBRID_PREGEN={os.path.join(src, 'pregen', 'hybrid')}",
            f"-DCJ_PYTHON={py}"]
