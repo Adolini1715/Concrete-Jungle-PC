@@ -545,8 +545,27 @@ def main():
     say("\n[6/6] Putting it together")
     exe = "pcj.exe" if win else "pcj"
     if win:
-        run(["strip", "-o", os.path.join(OUT, exe), os.path.join(bdir, exe)], env=env, quiet=True)
-        run(["strip", "-o", os.path.join(OUT, "launcher.exe"), os.path.join(bdir, "launcher.exe")], env=env, quiet=True)
+        for name in (exe, "launcher.exe"):
+            dst = os.path.join(OUT, name)
+            # A program that is still open (the launcher that started this update) cannot be overwritten on
+            # Windows, but it can be renamed: move it aside, the new one takes its name.
+            old = dst + ".old"
+            try:
+                if os.path.isfile(old):
+                    os.remove(old)
+            except OSError:
+                pass
+            if os.path.isfile(dst):
+                try:
+                    os.replace(dst, old)
+                except OSError:
+                    fail(f"{name} is in use and could not be replaced. Close the game and the launcher, "
+                         "then run Install.bat again.")
+            run(["strip", "-o", dst, os.path.join(bdir, name)], env=env, quiet=True)
+            try:
+                os.remove(old)
+            except OSError:
+                pass    # still open: it goes on the next install
         with open(os.path.join(OUT, "install-root.txt"), "w") as f:   # the launcher updates from here
             f.write(REPO + "\n")
         for f in (os.path.join(deps, "sdl2", "bin", "SDL2.dll"), os.path.join(deps, "epoxy", "bin", "libepoxy-0.dll"),
