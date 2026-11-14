@@ -68,6 +68,8 @@ now lives inside the folder you unzipped.
   one only costs time once, not once per session. (Shader cache, on by default.)
 - The HUD energy count no longer slides left out of its field.
 - A boss's health bar shows when the boss takes damage, not only while you are locked on.
+- Rain streaks are drawn again. The renderer dropped every line the game drew, so the rain was missing
+  from the title fly-in, the menu and rainy levels.
 - Quick load (F8, or LB + RB) asks first: press it a second time within a few seconds to load. One
   accidental press no longer throws your current game away.
 - In menus, the fixed menu keys ignore your key bindings (Enter bound to an action no longer
