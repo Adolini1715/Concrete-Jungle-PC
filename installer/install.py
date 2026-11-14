@@ -467,10 +467,19 @@ def main():
     os.makedirs(os.path.join(src, "game"), exist_ok=True)
     cp(xbe, os.path.join(src, "game", "default.xbe"))
     xr = os.path.join(src, "xboxrecomp")
-    if fetch_commit(git, gitenv, XR_URL, XR_REV, xr) or not os.path.isfile(os.path.join(xr, ".pcj-patched")):
-        run([git, "-C", xr, "apply", os.path.join(src, "patches", "xboxrecomp-v0.15.0-pcj.patch")], env=gitenv,
-            quiet=True)
-        open(os.path.join(xr, ".pcj-patched"), "w").close()
+    patch = os.path.join(src, "patches", "xboxrecomp-v0.15.0-pcj.patch")
+    with open(patch, "rb") as f:
+        want = hashlib.sha1(f.read()).hexdigest()
+    mark = os.path.join(xr, ".pcj-patched")
+    have = open(mark).read().strip() if os.path.isfile(mark) else None
+    if fetch_commit(git, gitenv, XR_URL, XR_REV, xr) or have != want:
+        if have is not None:    # an update changed the patch: back to the clean toolkit before applying the new one
+            say("  updating the recompiler patch")
+            run([git, "-C", xr, "reset", "-q", "--hard"], env=gitenv, quiet=True)
+            run([git, "-C", xr, "clean", "-q", "-fd"], env=gitenv, quiet=True)
+        run([git, "-C", xr, "apply", patch], env=gitenv, quiet=True)
+        with open(mark, "w") as f:
+            f.write(want)
     decomp = os.path.join(src, "pcj-decomp")
     local = os.path.join(REPO, "pcj-decomp")    # an offline copy next to Install.bat wins
     if os.path.isfile(os.path.join(local, "symbols", "functions.csv")):
