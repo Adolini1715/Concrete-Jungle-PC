@@ -18,5 +18,8 @@ port, with these exceptions:
 No part of the game (code, data, art, audio or video) is in this repository. Building the port
 needs your own copy of Predator: Concrete Jungle.
 
-Predator: Concrete Jungle and Predator are trademarks of their respective owners. This project is
-not affiliated with or endorsed by them.
+Predator: Concrete Jungle is © 2005 its original rights holders: developed by Eurocom, published by
+Vivendi Universal Games, licensed from Twentieth Century Fox (Fox Interactive). All rights to the
+game, its code, art, audio and names belong to them. Predator: Concrete Jungle and Predator are
+trademarks of their respective owners. This is an unofficial fan project, not affiliated with or
+endorsed by any of them.

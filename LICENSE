@@ -1,6 +1,17 @@
+SCOPE: this licence covers only the code, tools and documentation written for this
+port (see NOTICE.md for the exceptions). It does not cover Predator: Concrete Jungle
+or anything taken from it, and grants no rights to the game.
+
+Predator: Concrete Jungle is (c) 2005 its original rights holders. It was developed
+by Eurocom, published by Vivendi Universal Games and licensed from Twentieth Century
+Fox (Fox Interactive). All rights to the game, its code, art, audio and names belong
+to them.
+
+-------------------------------------------------------------------------------
+
 MIT License
 
-Copyright (c) 2026 Adolini1715
+Copyright (c) 2026 Adolini1715 (for the port's own code only)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
