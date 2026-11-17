@@ -47,8 +47,7 @@ now lives inside the folder you unzipped.
   Texture Packs, Check for Updates and Report a Problem. It is drawn with the game's own logo and
   loading-screen art, read from your disc.
 - **HD texture packs from the launcher**: Texture Packs lists the packs available to download
-  (Scarface, Weapons and Gear, City Hunter, Alien Hunter and Ritual; more costumes as they are
-  finished),
+  (Scarface, Weapons and Gear, City Hunter, Alien Hunter, Ritual, Dark Blade and Bad Blood),
   one click each, checked against a known hash. Packs you already have can be switched on and off
   there.
 - **Report a Problem** collects the game's logs into one zip in the install's `logs` folder. Logs

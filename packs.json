@@ -55,6 +55,28 @@
       "urls": [
         "https://archive.org/download/pcj-scarface-hd-pack/pcj-ritual-hd.zip"
       ]
+    },
+    {
+      "id": "dark-blade",
+      "name": "Dark Blade HD",
+      "about": "The Dark Blade costume in HD",
+      "file": "pcj-dark-blade-hd.zip",
+      "size": 15186587,
+      "sha1": "491d241f36c9051013d5be95d1692e3b8759a504",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-dark-blade-hd.zip"
+      ]
+    },
+    {
+      "id": "bad-blood",
+      "name": "Bad Blood HD",
+      "about": "The Bad Blood costume in HD",
+      "file": "pcj-bad-blood-hd.zip",
+      "size": 12756491,
+      "sha1": "5746d98318a3da590fa8b2b6f2afe9b3eced369d",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-bad-blood-hd.zip"
+      ]
     }
   ]
 }
