@@ -4096,7 +4096,7 @@ static void N_XItemHandler_Player__DoCrouch_001689c0(gv::XItemHandler_Player *se
     if (self->m_bAnimEnded) {
         if (self->m_SubMode == 0 || (self->m_SubMode > 1 && self->m_SubMode <= 3)) cjg::call_this<void>(cjg::Site(0x0015e100u, 0x00168b35u, 0x14u), self, (uint32_t)(2), (uint32_t)(1), (float)(-1.0f));
     }
-    if (self->m_CrouchTimer >= 0.33333334f && !(modern && self->m_StickMag > 0.0f)) {
+    if (self->m_CrouchTimer >= ::cjmod_power_time() && !(modern && self->m_StickMag > 0.0f)) {
         gv::EXQuaternion &q = *F.at<gv::EXQuaternion>(0x20); cjg::assign(&q, q = (*([&]() -> gv::EXQuaternion * { gv::EXQuaternion *__t = F.at<gv::EXQuaternion>(0x30); N_EXQuaternion__EXQuaternion_00012470(__t, (*cjg::up<gv::EXMaths::vec_xyzw>(&(cjg::call_this<gv::EXVector &>(cjg::Site(0x00012c50u, 0u, 0u, 0), cjg::up<gv::EXPlacementItem>(self->m_pItem, 0))), 0))); return __t; }())));
         float &d = *F.at<float>(0x40); d = cjg::call_cdecl<float>(cjg::Site(0x0014a050u, 0u, 0u, 0), (float)((*cjg::up<gv::EXMaths::vec_xyzw>(&(q), 0)).y), (float)(self->m_PadAngle));
         (*cjg::up<gv::EXMaths::vec_xyzw>(&(q), 0)).y += d > 0.0f ? cjg::call_cdecl<float &>(cjg::Site(0x0001a000u, 0u, 0u, 0), cjg::ref(d), cjg::ref(cjg::spill(F.at<float>(0x44), cjg::call_cdecl<float>(cjg::Site(0x00013950u, 0u, 0u, 0)) * 0.04363323f))) : cjg::call_cdecl<float &>(cjg::Site(0x0001a040u, 0u, 0u, 0), cjg::ref(d), cjg::ref(cjg::spill(F.at<float>(0x48), cjg::call_cdecl<float>(cjg::Site(0x00013950u, 0u, 0u, 0)) * -0.04363323f)));
@@ -4119,7 +4119,7 @@ static void N_XItemHandler_Player__DoCrouch_001689c0(gv::XItemHandler_Player *se
     XItemPhysics *pPhys = cjg::pcast<gv::XItemPhysics *>(self->m_pItem->m_pItemPhysics, 0);
     int moving = modern && cjg::call_cdecl<float>(cjg::Site(0x000110c0u, 0u, 0u, 0), (float)((*cjg::up<gv::EXMaths::vec_xyzw>(&(self->m_Speed), 0)).x * (*cjg::up<gv::EXMaths::vec_xyzw>(&(self->m_Speed), 0)).x + (*cjg::up<gv::EXMaths::vec_xyzw>(&(self->m_Speed), 0)).z * (*cjg::up<gv::EXMaths::vec_xyzw>(&(self->m_Speed), 0)).z)) > 0.09f;
     if (!modern) cjg::call_this<void>(cjg::Site(0x00011e20u, 0u, 0u, 0), &(self->m_Speed));
-    if (self->m_CrouchTimer >= 0.33333334f && (self->m_PredMsgFlags & 2)) {
+    if (self->m_CrouchTimer >= ::cjmod_power_time() && (self->m_PredMsgFlags & 2)) {
         cjg::call_this<void>(cjg::Site(0x001a4390u, 0x00168bddu, 0x14u, 4), pPhys, (float)(10.0f));
         cjg::call_this<void>(cjg::Site(0x0015e100u, 0u), self, (uint32_t)(3), (uint32_t)(2), (float)(-1.0f));
     } else if (self->m_CrouchTimer >= 0.1f && (self->m_PredMsgFlags & 0x10)) {

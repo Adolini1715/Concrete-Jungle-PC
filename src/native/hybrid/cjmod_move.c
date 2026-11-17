@@ -322,6 +322,16 @@ static void charge_reset_tick(uint8_t *mem, uint32_t h)
     }
     s_crouch_hold = 0.0f;
 }
+/* How long jump must be held for the full-power jump. The original's 1/3 s made a slightly long tap
+ * (0.35-0.45 s, easy while running with the button held) launch the full jump (James, 2026-11-16).
+ * Modern movement: CJ_POWER_JUMP_MS, default 500. Classic: the original 1/3 s. */
+float cjmod_power_time(void)
+{
+    static float t = -1.0f;
+    if (!cjmod_move_modern()) return 0.33333334f;
+    if (t < 0.0f) { const char *e = getenv("CJ_POWER_JUMP_MS"); t = e && *e ? (float)atof(e) / 1000.0f : 0.5f; if (!(t >= 0.1f && t <= 2.0f)) t = 0.5f; }
+    return t;
+}
 /* the run's target inertia (original curve) while charging: CJ_CHARGE_MOVE percent of its ground speed */
 float cjmod_charge_cap(float mag) { return cjmod_run_charging() ? cjmod_run_inv(orig_run(mag) * cjmod_charge_move()) : mag; }
 void cjmod_crouch_hold_start(void)
@@ -350,7 +360,7 @@ void cjmod_charge_feedback(float timer, int power_ok, int medium_ok)
     if (!pct) return;
     if (xbox_HostNowNs() - s_fb_ns > CHARGE_STALE_NS) s_fb_state = 0;   /* a new hold */
     s_fb_ns = xbox_HostNowNs();
-    float need = power_ok ? 0.33333334f : (medium_ok ? 0.1f : 1e9f);
+    float need = power_ok ? cjmod_power_time() : (medium_ok ? 0.1f : 1e9f);
     if (timer < need) return;
     uint32_t k = (uint32_t)pct;
     if (!s_fb_state) { s_fb_state = 1; cj_host_rumble_timed((uint16_t)(0xC000u * k / 100u), (uint16_t)(0xFFFFu * k / 100u > 0xFFFFu ? 0xFFFFu : 0xFFFFu * k / 100u), 140); }

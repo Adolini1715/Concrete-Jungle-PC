@@ -41,6 +41,7 @@ extern "C" float cjmod_charge_cap(float mag);
 extern "C" void cjmod_crouch_hold_start(void);
 extern "C" int cjmod_crouch_hold(float dt);
 extern "C" void cjmod_charge_feedback(float timer, int power_ok, int medium_ok);
+extern "C" float cjmod_power_time(void);
 extern "C" float cjmod_attack_carry(float mul);
 extern "C" float cjmod_turn_mult(void);
 extern "C" float cjmod_turn_cost(void);
@@ -352,7 +353,7 @@ void XItemHandler_Player::DoCrouch()
     if (m_bAnimEnded) {
         if (m_SubMode == 0 || (m_SubMode > 1 && m_SubMode <= 3)) SetupMove(2, 1, -1.0f);
     }
-    if (m_CrouchTimer >= 0.33333334f && !(modern && m_StickMag > 0.0f)) {
+    if (m_CrouchTimer >= cjmod_power_time() && !(modern && m_StickMag > 0.0f)) {
         EXQuaternion q = m_pItem->Rotation();
         float d = Vec_AngleDifference(q.y, m_PadAngle);
         q.y += d > 0.0f ? min(d, XApp::GameFrameRateMul() * 0.04363323f) : max(d, XApp::GameFrameRateMul() * -0.04363323f);
@@ -375,7 +376,7 @@ void XItemHandler_Player::DoCrouch()
     XItemPhysics *pPhys = (XItemPhysics *)m_pItem->m_pItemPhysics;
     int moving = modern && sqrtf(m_Speed.x * m_Speed.x + m_Speed.z * m_Speed.z) > 0.09f;
     if (!modern) m_Speed.SetZero();
-    if (m_CrouchTimer >= 0.33333334f && (m_PredMsgFlags & 2)) {
+    if (m_CrouchTimer >= cjmod_power_time() && (m_PredMsgFlags & 2)) {
         pPhys->SetThrustToAttainHeight(10.0f);
         SetupMove(3, 2, -1.0f);
     } else if (m_CrouchTimer >= 0.1f && (m_PredMsgFlags & 0x10)) {
