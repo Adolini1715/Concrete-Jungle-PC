@@ -56,12 +56,21 @@ now lives inside the folder you unzipped.
 - **Compatibility mode** and an optional **Native renderer (experimental)** toggle in PC Settings.
   The native renderer draws from the game's own Direct3D calls instead of its GPU command stream.
   It may run faster. It is off by default; turn it off again if anything looks wrong.
+- **Controller only** (PC Settings): the keyboard and mouse never control the game, so a click
+  while taking a screenshot cannot fire a weapon. Menus and the F-key hotkeys still work. F12 takes
+  a screenshot without leaving the game.
+- **Screen trails** (PC Settings, on by default): the game's glow and soft screen blur mix in the
+  last few frames, which leaves a ghost of everything when the camera moves. Turn it off to keep
+  the glow without the ghost.
 
 ## Fixed
 
 - **Music was silent during most chapters' intro cutscenes** and only started with gameplay. A
   request to start a track that arrived while the previous one was still fading out was dropped.
-- **A tap of Jump sometimes gave a fully charged jump** after chaining charged jumps.
+- **A tap of Jump sometimes gave a fully charged jump** after chaining charged jumps, or when Jump
+  was pressed again just after letting go of a running charge.
+- **The Predator could vanish and the game carry on without him** after being blown back by an
+  explosion (seen with the depot's power sources). He is now put back where he was hit.
 - **Settings and controls reset when a save was loaded.** Once you change a setting, loading a
   save no longer puts the save's old settings back.
 - **Stutter the first time an effect appears**: compiled shaders are now kept on disk, so each
@@ -72,7 +81,8 @@ now lives inside the folder you unzipped.
   from the title fly-in, the menu and rainy levels.
 - New controller buttons for quick save and quick load: hold both bumpers (LB + RB) and press d-pad
   up to save, d-pad down to load. Clicking both sticks and pressing both bumpers alone no longer do
-  anything, so they cannot fire by accident.
+  anything, so they cannot fire by accident. Pressing or letting go of the bumpers for the combo no
+  longer reaches the game as a bumper press (which used an item).
 - In menus, the fixed menu keys ignore your key bindings (Enter bound to an action no longer
   switches tabs), and a left click while rebinding cancels instead of binding Mouse Left.
 - With mouse look on, a menu no longer loses the pointer while you are still using it.
