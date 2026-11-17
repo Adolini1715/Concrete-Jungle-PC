@@ -622,9 +622,14 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
          * a guest code address), and whether the player has control. For the
          * "enemies get a head start on the cutscene" question. */
         {
-            static double cut_end_t = -100.0, last_dump = 0.0;
+            /* also through melee (2026-11-17, "they didn't respond"): while the player attacks or is hit and
+             * for 3 s after, four times a second, so an enemy's health and AI state show through the fight */
+            static double cut_end_t = -100.0, last_dump = 0.0, combat_t = -100.0;
+            int in_combat;
             if (last.cut && !s.cut) cut_end_t = t;
-            if (s.have_player && (s.cut || t - cut_end_t < 8.0) && t - last_dump >= 0.5) {
+            if (s.attacking || (s.have_player && last.have_player && s.health < last.health - 0.01f)) combat_t = t;
+            in_combat = !s.cut && t - combat_t < 3.0;
+            if (s.have_player && (s.cut || t - cut_end_t < 8.0 || in_combat) && t - last_dump >= (in_combat ? 0.25 : 0.5)) {
                 char buf[4096]; int bl = 0, n = 0, total = 0;
                 buf[0] = 0;
                 uint32_t p = g32(0x0048FC98u);
@@ -673,8 +678,8 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
                 }
                 {   /* the real player during a cutscene: hidden flag (Hide), render flag of its item */
                     uint32_t it = p ? g32(p + 4) : 0;
-                    gamelog_event("actors_near", "\"cut\":%u,\"since_end\":%.1f,\"player_ctl\":%d,\"hidden\":%d,\"render\":%d,\"pv\":%d,\"item\":[%.2f,%.2f,%.2f],\"head\":[%.2f,%.2f,%.2f],\"feet\":[%.2f,%.2f,%.2f],\"actors\":%d,\"n\":%d,\"list\":[%s]",
-                                  s.cut, s.cut ? -1.0 : t - cut_end_t, p ? (int8_t)g8(p + 0x30C) : -1,
+                    gamelog_event("actors_near", "\"combat\":%d,\"cut\":%u,\"since_end\":%.1f,\"player_ctl\":%d,\"hidden\":%d,\"render\":%d,\"pv\":%d,\"item\":[%.2f,%.2f,%.2f],\"head\":[%.2f,%.2f,%.2f],\"feet\":[%.2f,%.2f,%.2f],\"actors\":%d,\"n\":%d,\"list\":[%s]",
+                                  in_combat, s.cut, s.cut ? -1.0 : t - cut_end_t, p ? (int8_t)g8(p + 0x30C) : -1,
                                   p ? (int8_t)g8(p + 0xD8C) : -1, it ? (g8(it + 0x10) & 1) : -1, g8(0x00394B4Du), gf(g32(0x0048E890u) + 0xC8), gf(g32(0x0048E890u) + 0xCC), gf(g32(0x0048E890u) + 0xD0),
                                   gf(0x00481D5Cu), gf(0x00481D60u), gf(0x00481D64u), gf(0x00481D6Cu), gf(0x00481D70u), gf(0x00481D74u),
                                   total, n, buf);
