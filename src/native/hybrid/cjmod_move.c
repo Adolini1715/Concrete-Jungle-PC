@@ -45,6 +45,7 @@ float cjmod_jump_scale(void)
 
 void gamelog_event(const char *type, const char *fmt, ...);   /* gamelog.c */
 static void charge_reset_tick(uint8_t *mem, uint32_t h);
+static void nan_guard_tick(uint8_t *mem, uint32_t h);
 
 /* Every frame (cj_fps_tick): keep the player's gravity at the dial's value, and clear a jump
  * charge that ended without a jump (charge_reset_tick). */
@@ -62,6 +63,7 @@ void cjmod_move_tick(void)
     h = *(volatile uint32_t *)(mem + VA_PLAYER_INSTANCE);
     if (h < 0x10000u || h >= (0x80000000u + g_xbox_contig_size)) return;
     charge_reset_tick(mem, h);
+    nan_guard_tick(mem, h);
     if (g == 1.0f) return;
     item = *(volatile uint32_t *)(mem + h + 4);
     if (item < 0x10000u || item >= (0x80000000u + g_xbox_contig_size)) return;
@@ -322,6 +324,59 @@ static void charge_reset_tick(uint8_t *mem, uint32_t h)
     }
     s_crouch_hold = 0.0f;
 }
+/* Broken-physics recovery (2026-11-16): blown back mid-jump by mech rockets, the player's position
+ * went NaN the next frame; the blown-back fall (react mode 0x17, sub 5) waits for a landing that
+ * never comes, so the game ran on with the Predator gone. Every frame: remember the last state with
+ * finite position, rotation and velocity; if any turns non-finite, put him back there with no
+ * velocity (he falls and lands, ending the reaction) and log which values broke ("nan_recover"),
+ * with the previous frame's, to find the source. CJ_NAN_GUARD=0 turns it off. */
+/* x, y, z only: a w lane can hold anything */
+static int fin4(const volatile float *v) { return isfinite(v[0]) && isfinite(v[1]) && isfinite(v[2]); }
+static void nan_guard_tick(uint8_t *mem, uint32_t h)
+{
+    static int on = -1, have, logged;
+    static float pos[4], rot[4], prev[16];
+    static uint32_t pmode, psub, last_item;
+    uint32_t item, phys;
+    volatile float *p, *r, *dm, *u2b8 = (volatile float *)(mem + h + 0x2b8), *spd = (volatile float *)(mem + h + 0x2e8);
+    uint32_t mode = *(volatile uint32_t *)(mem + h + 0x20c), sub = *(volatile uint32_t *)(mem + h + 0x210);
+    int bp, br, bd, bu, bs;
+    if (on < 0) { const char *e = getenv("CJ_NAN_GUARD"); on = !(e && *e == '0'); }
+    if (!on) return;
+    item = *(volatile uint32_t *)(mem + h + 4);
+    if (item < 0x10000u || item >= (0x80000000u + g_xbox_contig_size)) { have = 0; return; }
+    if (item != last_item) { last_item = item; have = 0; }   /* a new level's player: never restore an old position */
+    phys = *(volatile uint32_t *)(mem + item + 0x148);
+    if (phys < 0x10000u || phys >= (0x80000000u + g_xbox_contig_size)) { have = 0; return; }
+    p = (volatile float *)(mem + item + 0xc8); r = (volatile float *)(mem + item + 0xd8); dm = (volatile float *)(mem + phys + 0x50);
+    bp = !fin4(p); br = !fin4(r); bd = !fin4(dm); bu = !fin4(u2b8); bs = !fin4(spd);
+    if (!(bp | br | bd | bu | bs)) {
+        int i;
+        for (i = 0; i < 4; i++) { pos[i] = p[i]; rot[i] = r[i]; prev[i] = dm[i]; prev[4 + i] = u2b8[i]; prev[8 + i] = spd[i]; }
+        prev[12] = p[0]; prev[13] = p[1]; prev[14] = p[2];
+        pmode = mode; psub = sub; have = 1;
+        return;
+    }
+    if (logged++ < 20) {
+        fprintf(stderr, "[MOVE] broken player physics (pos %d rot %d vel %d move %d speed %d, mode %u.%u, was %u.%u): %s\n",
+                bp, br, bd, bu, bs, mode, sub, pmode, psub, have ? "restored last good position" : "no good position yet");
+        gamelog_event("nan_recover", "\"bad\":\"%s%s%s%s%s\",\"mode\":%u,\"sub\":%u,\"prev_mode\":%u,\"prev_sub\":%u,"
+                      "\"prev_vel\":[%.3f,%.3f,%.3f],\"prev_move\":[%.3f,%.3f],\"prev_speed\":[%.3f,%.3f],\"pos\":[%.2f,%.2f,%.2f],\"restored\":%d",
+                      bp ? "pos " : "", br ? "rot " : "", bd ? "vel " : "", bu ? "move " : "", bs ? "speed" : "",
+                      mode, sub, pmode, psub, prev[0], prev[1], prev[2], prev[4], prev[6], prev[8], prev[10], prev[12], prev[13], prev[14], have);
+    }
+    if (!have) return;
+    {
+        int i;
+        for (i = 0; i < 3; i++) {
+            p[i] = pos[i]; dm[i] = 0.0f; u2b8[i] = 0.0f; spd[i] = 0.0f;
+            if (br) r[i] = rot[i];
+        }
+        *(volatile int8_t *)(mem + item + 0x7e) = 0;   /* m_validMtx: rebuild the matrix from the fixed values */
+        { volatile float *lp = (volatile float *)(mem + h + 0x2c8); for (i = 0; i < 3; i++) lp[i] = pos[i]; }   /* m_LastPos */
+    }
+}
+
 /* How long jump must be held for the full-power jump. The original's 1/3 s made a slightly long tap
  * (0.35-0.45 s, easy while running with the button held) launch the full jump (James, 2026-11-16).
  * Modern movement: CJ_POWER_JUMP_MS, default 500. Classic: the original 1/3 s. */
