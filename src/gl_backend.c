@@ -3537,8 +3537,12 @@ static void host_input(void)
     {   /* controller quick save / quick load: hold both bumpers (LB + RB) and press d-pad up to save,
          * d-pad down to load. While both bumpers are held the game sees neither bumper nor d-pad up/down.
          * The slot is picked in Options > PC Settings. */
-        static int held_up, held_down;
-        if (p.ana[4] > 128 && p.ana[5] > 128) {
+        /* Once both bumpers are down the combo owns them until BOTH are fully up again, so
+         * letting go of one before the other never reaches the game as a bumper press. */
+        static int held_up, held_down, armed;
+        if (p.ana[4] > 128 && p.ana[5] > 128) armed = 1;
+        else if (armed && p.ana[4] <= 16 && p.ana[5] <= 16) armed = 0;
+        if (armed) {
             int up = (p.dig & 0x01) != 0, down = (p.dig & 0x02) != 0;
             if (up && !held_up) qs_request(1);
             if (down && !held_down) qs_request(2);
