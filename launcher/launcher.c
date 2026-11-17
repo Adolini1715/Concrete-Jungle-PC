@@ -86,7 +86,7 @@ static void find_paths(void)
 }
 
 /* ---------------------------------------------------------------- pcj.ini */
-typedef struct { const char *key, *label, *help; int lo, hi, step, def; } Setting;
+typedef struct { const char *key, *label, *help; int lo, hi, step, def, exp; } Setting;   /* exp: on the Experimental page */
 static const Setting S[] = {
     {"CJ_FPS", "Frame rate", "60 fps, or 30 like the original.", 30, 60, 30, 30},
     {"CJ_GL_SCALE", "Resolution scale", "1 = 640x480 (original) ... 3 = 1440p ... 5 = 4K.", 1, 5, 1, 1},
@@ -102,7 +102,8 @@ static const Setting S[] = {
     {"CJ_GLYPHS", "PC button prompts", "Keyboard or modern controller icons in game.", 0, 1, 1, 1},
     {"CJ_GL_SHADER_CACHE", "Shader cache", "Keeps compiled shaders so each one only stutters once.", 0, 1, 1, 1},
     {"CJ_SAFE_RENDER", "Compatibility mode", "Turns off this version's renderer speedups. Try it if anything looks wrong.", 0, 1, 1, 0},
-    {"CJ_API_TAKEOVER", "Native renderer (experimental)", "May run faster. Draws from the game's own calls. Turn off if anything looks wrong.", 0, 1, 1, 0},
+    {"CJ_API_TAKEOVER", "Native renderer", "May run faster. Draws from the game's own calls. Turn off if anything looks wrong.", 0, 1, 1, 0, 1},
+    {"CJ_BOSS_POISE", "Boss poise", "Bosses stop flinching for a few seconds after a quick run of hits, so they can't be stun-locked.", 0, 1, 1, 0, 1},
     {"CJ_TEST_CAPTURE", "Test captures", "Records 3 short frame captures per session for bug reports.", 0, 1, 1, 0},
 };
 #define NS ((int)(sizeof S / sizeof S[0]))
@@ -961,8 +962,8 @@ static void background(Uint32 t, int small_logo)
 /* Every page is a list of rows, laid out and driven the same way: mouse hover or up/down
  * picks a row, Enter / A / click activates, left/right change a value, Esc / B goes back. */
 typedef struct { const char *label; int kind; int idx; } Row;   /* kind: 0 action, 1 setting, 2 pack */
-enum { HOME, SETTINGS, PACKS, TESTS };
-enum { A_PLAY, A_UPDATE, A_SETTINGS, A_PACKS, A_REPORT, A_QUIT, A_BACK, A_OPENTEX, A_CHECK, A_DECK, A_TESTS };
+enum { HOME, SETTINGS, PACKS, TESTS, EXPER };
+enum { A_PLAY, A_UPDATE, A_SETTINGS, A_PACKS, A_REPORT, A_QUIT, A_BACK, A_OPENTEX, A_CHECK, A_DECK, A_TESTS, A_EXPER };
 static int s_page, s_sel, s_top;
 static int mx, my, mclick, mmoved, s_hot;
 static int k_up, k_down, k_left, k_right, k_ok, k_back;
@@ -1119,7 +1120,7 @@ static void deck_first_run(void)
 
 static void go(int page)
 {
-    if (s_page == SETTINGS && s_ini_dirty) ini_save();
+    if ((s_page == SETTINGS || s_page == EXPER) && s_ini_dirty) ini_save();
     s_page = page;
     s_sel = s_top = 0;
     if (page == SETTINGS) ini_load();
@@ -1175,31 +1176,34 @@ static void page_home(void)
     status_box();
 }
 
-static void page_settings(void)
+/* PC Settings (exper 0) or its Experimental page (exper 1): the settings marked exp go on the second */
+static void page_settings_list(int exper)
 {
-    Row r[NS + 2];
-    int i, a, deck = is_steam_deck(), nr = NS + 1 + deck;   /* the Deck preset row only on a Deck */
-    int step = nr > 14 ? 21 : nr > 13 ? 22 : 24;            /* more rows: tighter, Back stays above the footer */
-    text(&F_ui, 92, 160, RED, 0, "PC SETTINGS");
-    for (i = 0; i < NS; i++) r[i] = (Row){S[i].label, 1, i};
-    if (deck) r[NS] = (Row){"Apply Steam Deck preset", 0, A_DECK};
+    Row r[NS + 3];
+    int vis[NS], nv = 0, i, a, deck = !exper && is_steam_deck(), nr;
+    int step;
+    for (i = 0; i < NS; i++) if (S[i].exp == exper) vis[nv++] = i;
+    nr = nv + 1 + deck + !exper;   /* + the Deck preset row (only on a Deck), + Experimental, + Back */
+    step = nr > 14 ? 21 : nr > 13 ? 22 : 24;            /* more rows: tighter, Back stays above the footer */
+    text(&F_ui, 92, 160, RED, 0, exper ? "EXPERIMENTAL" : "PC SETTINGS");
+    for (i = 0; i < nv; i++) r[i] = (Row){S[vis[i]].label, 1, vis[i]};
+    if (deck) r[nv] = (Row){"Apply Steam Deck preset", 0, A_DECK};
+    if (!exper) r[nr - 2] = (Row){"Experimental", 0, A_EXPER};
     r[nr - 1] = (Row){"Back", 0, A_BACK};
     a = rows(r, nr, 92, 186, step, &F_ui, 470, nr);   /* all rows on screen: the values column does not scroll */
-    for (i = 0; i <= NS; i++) {
+    for (i = 0; i < nv; i++) {
         float ry = 186 + i * step;
-        if (i < NS) {
-            int over = mx >= 440 && mx < 720 && my >= ry - 18 && my < ry + 6;
-            text(&F_ui, 470, ry, i == s_sel ? 0xFFFFFFFFu : TXT_DIM, 0, val_str(i));
-            if (i == s_sel && !(S[i].lo == 0 && S[i].hi == 1)) {
-                text(&F_ui, 450, ry, RED, 1, "<");
-                text(&F_ui, 470 + text_w(&F_ui, val_str(i)) + 18, ry, RED, 1, ">");
-            }
-            if (over) s_hot = 1;
+        int k = vis[i], over = mx >= 440 && mx < 720 && my >= ry - 18 && my < ry + 6;
+        text(&F_ui, 470, ry, i == s_sel ? 0xFFFFFFFFu : TXT_DIM, 0, val_str(k));
+        if (i == s_sel && !(S[k].lo == 0 && S[k].hi == 1)) {
+            text(&F_ui, 450, ry, RED, 1, "<");
+            text(&F_ui, 470 + text_w(&F_ui, val_str(k)) + 18, ry, RED, 1, ">");
         }
+        if (over) s_hot = 1;
     }
-    if (s_sel < NS) {
-        if (k_left) change(s_sel, -1);
-        if (k_right) change(s_sel, 1);
+    if (s_sel < nv) {
+        if (k_left) change(vis[s_sel], -1);
+        if (k_right) change(vis[s_sel], 1);
     }
     if (a >= 0) {
         if (r[a].kind == 1) {
@@ -1209,13 +1213,17 @@ static void page_settings(void)
             else if (s_val[k] + S[k].step > S[k].hi) { s_val[k] = S[k].lo; s_ini_dirty = 1; }
             else change(k, 1);
         } else if (r[a].idx == A_DECK) { deck_preset(); msg("Steam Deck preset applied.%s", ""); }
-        else go(HOME);
+        else if (r[a].idx == A_EXPER) go(EXPER);
+        else go(exper ? SETTINGS : HOME);
     }
-    if (k_back) go(HOME);
+    if (k_back) go(exper ? SETTINGS : HOME);
     footer("Change", "Back");
-    if (s_sel < NS) text(&F_small, W - 40, H - 21, TXT_DIM, 2, S[s_sel].help);
-    else if (deck && s_sel == NS) text(&F_small, W - 40, H - 21, TXT_DIM, 2, "60 fps, 2x, fullscreen, V-Sync, controller prompts, regular renderer.");
+    if (s_sel < nv) text(&F_small, W - 40, H - 21, TXT_DIM, 2, S[vis[s_sel]].help);
+    else if (deck && s_sel == nv) text(&F_small, W - 40, H - 21, TXT_DIM, 2, "60 fps, 2x, fullscreen, V-Sync, controller prompts, regular renderer.");
+    else if (!exper && s_sel == nr - 2) text(&F_small, W - 40, H - 21, TXT_DIM, 2, "Settings still being tested. Turn one off if anything looks wrong.");
 }
+
+static void page_settings(void) { page_settings_list(0); }
 
 /* Performance tests (Steam Deck, or CJ_PERF_TESTS=1): one run each, the same save and spot. Each
  * sets its overrides for this launch only (pcj.ini is untouched) and names the run in the log
@@ -1526,6 +1534,7 @@ int main(int argc, char **argv)
         if (s_page == HOME) page_home();
         else if (s_page == SETTINGS) page_settings();
         else if (s_page == TESTS) page_tests();
+        else if (s_page == EXPER) page_settings_list(1);
         else page_packs();
         drop_box(0);
         if (s_msg && SDL_GetTicks() - s_msg_t < 8000) {

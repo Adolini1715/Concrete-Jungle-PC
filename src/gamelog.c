@@ -280,7 +280,7 @@ static void write_session(const char *gl_vendor, const char *gl_renderer, const 
         static const char *keys[] = {"CJ_GL", "CJ_GL_VSH", "CJ_WINDOW_SCALE", "CJ_FULLSCREEN", "CJ_VSYNC", "CJ_MOVIE_AUDIO",
                                      "CJ_AUDIO_XA2", "CJ_NATIVE_SWAP", "CJ_GL_WBUF", "CJ_GL_ANISO", "CJ_GL_LOD_BIAS",
                                      "CJ_GAMELOG_SHOT_EVERY", "CJ_API_TAKEOVER", "CJ_API_VERIFY", "CJ_GL_RING", "CJ_FPS",
-                                     "CJ_CHARGE_FIX", "CJ_TEST_CAPTURE", "CJ_GL_PERSIST", "CJ_PERF_TEST", NULL};
+                                     "CJ_CHARGE_FIX", "CJ_BOSS_POISE", "CJ_TEST_CAPTURE", "CJ_GL_PERSIST", "CJ_PERF_TEST", NULL};
         int i;
         {   const char *t = getenv("CJ_API_TAKEOVER");
             fprintf(f, "renderer: %s\n", t && *t == '1' ? "native (draws from the game's own D3D calls)" : "regular (emulated GPU)");
@@ -670,10 +670,12 @@ void gamelog_frame(uint32_t flip, uint64_t draws_total, uint64_t tris_total, con
                             sl += snprintf(stk + sl, sizeof stk - sl, "%s%X", k ? "," : "", g32(a + 0x188 + k * 0x80 + 0x70));
                         bl += snprintf(buf + bl, sizeof buf - bl, "%s{\"id\":%u,\"d\":%.1f,\"hp\":%.0f,\"st\":\"%08X\",\"w\":%u,"
                                        "\"loc\":[\"%X\",\"%X\",\"%X\",\"%X\",\"%X\"],\"msg\":\"%X\",\"stk\":\"%s\",\"sf\":\"%08X\","
-                                       "\"ref\":\"%X\",\"bp\":%d,\"poi\":\"%s\",\"f2\":\"%X\",\"sit\":%.1f,\"r7ec\":\"%X\",\"prof\":\"%s\"}",
+                                       "\"ref\":\"%X\",\"bp\":%d,\"poi\":\"%s\",\"f2\":\"%X\",\"sit\":%.1f,\"r7ec\":\"%X\",\"prof\":\"%s\","
+                                       "\"af\":\"%X\",\"hits\":%d}",
                                        n++ ? "," : "", i, d, gf(a + 0x7DC), g32(sm + 0x58), g8(ab + 0x14),
                                        g32(sm), g32(sm + 4), g32(sm + 8), g32(sm + 12), g32(sm + 16), g32(sm + 0x88), stk, g32(a + 0x93C),
-                                       g32(a + 0x770), (int)g32(a + 0x7D8), poi, g32(a + 0x944), gf(a + 0x814), g32(a + 0x7EC), prof);
+                                       g32(a + 0x770), (int)g32(a + 0x7D8), poi, g32(a + 0x944), gf(a + 0x814), g32(a + 0x7EC), prof,
+                                       g32(a + 0x940), (int)g32(a + 0x860));   /* m_ActorFlags (bit 15 boss), consecutive hits */
                     }
                 }
                 {   /* the real player during a cutscene: hidden flag (Hide), render flag of its item */

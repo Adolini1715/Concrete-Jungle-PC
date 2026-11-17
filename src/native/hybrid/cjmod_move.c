@@ -46,6 +46,8 @@ float cjmod_jump_scale(void)
 void gamelog_event(const char *type, const char *fmt, ...);   /* gamelog.c */
 static void charge_reset_tick(uint8_t *mem, uint32_t h);
 static void nan_guard_tick(uint8_t *mem, uint32_t h);
+static void boss_poise_tick(uint8_t *mem);
+extern uint64_t xbox_HostNowNs(void);
 
 /* Every frame (cj_fps_tick): keep the player's gravity at the dial's value, and clear a jump
  * charge that ended without a jump (charge_reset_tick). */
@@ -64,6 +66,7 @@ void cjmod_move_tick(void)
     if (h < 0x10000u || h >= (0x80000000u + g_xbox_contig_size)) return;
     charge_reset_tick(mem, h);
     nan_guard_tick(mem, h);
+    boss_poise_tick(mem);
     if (g == 1.0f) return;
     item = *(volatile uint32_t *)(mem + h + 4);
     if (item < 0x10000u || item >= (0x80000000u + g_xbox_contig_size)) return;
@@ -464,4 +467,70 @@ float cjmod_boss_health(int slot, float h)
     prev = last[slot];
     last[slot] = h;
     return prev;
+}
+
+/* Boss poise (CJ_BOSS_POISE=1; launcher PC Settings > Experimental). The original lets any hit
+ * restart an enemy's hit reaction (ActorUtil.cpp AR_ReactFromHit pops STATE_HitReact and pushes a
+ * new one), so a boss caught in a combo flinches until it dies. With poise on, a boss (Actor
+ * m_ActorFlags.m_bBoss, +0x940 bit 15) that takes a quick run of hits (m_ConsecutiveHitCounter +0x860,
+ * which the game raises for each hit landing within 1 s of the last) stops flinching for a few
+ * seconds: m_StateFlags.m_bDontDoHitReaction (+0x93c bit 4), which AR_ReactFromHit checks first. It
+ * still takes the damage. Bosses: the boss flag (the boss skeleton) or a boss health bar. Regular enemies are untouched (James, 2026-11-17: stun-locking should only be
+ * stopped on bosses). The bit is only cleared again if this set it. Off in deterministic mode.
+ *   CJ_BOSS_POISE_HITS  hits in a row before poise (default 4)
+ *   CJ_BOSS_POISE_MS    how long it lasts (default 3000) */
+#define VA_ACTOR_LIST 0x0047C3F0u   /* g_aActorList: 128 x 0x18, Actor * at +0x10 */
+/* Actor::HasBossBar() && IsThreat(), the HUD's test for the boss health bar (FEHud::UpdateBossBar):
+ * the actor's sub-group animation row (SubGroupAnims::ms_pSubGroupAnimsTable 0x48FCE0, 0x48 a row,
+ * index Actor +0x810) has m_Anims[15] (+0x40) set, and its profile (index Actor +0x778: table
+ * 0x4816CC + 4 * sheet, 0x14C a row) has m_Honour (+0x64) above 0 */
+static int boss_bar(uint8_t *mem, uint32_t a)
+{
+    uint32_t tab = *(volatile uint32_t *)(mem + 0x0048FCE0u), si = *(volatile uint32_t *)(mem + a + 0x810);
+    uint32_t idx = *(volatile uint32_t *)(mem + a + 0x778), sh = idx & 0xFFFF, row = idx >> 16, pr;
+    if (tab < 0x10000u || si > 4096 || *(volatile int32_t *)(mem + tab + si * 0x48u + 0x40) <= 0) return 0;
+    if (sh == 0xFFFF || row == 0xFFFF || sh > 64 || (pr = *(volatile uint32_t *)(mem + 0x004816CCu + sh * 4)) < 0x10000u) return 0;
+    return *(volatile int32_t *)(mem + pr + row * 0x14Cu + 0x64) > 0;
+}
+static void boss_poise_tick(uint8_t *mem)
+{
+    static int on = -1, hits = 4;
+    static uint64_t until_ns[128], ms = 3000;
+    static uint32_t who[128];
+    static uint8_t ours[128];
+    uint64_t now;
+    uint32_t i;
+    if (on < 0) {
+        const char *e = getenv("CJ_BOSS_POISE");
+        on = e && *e == '1';
+        if ((e = getenv("CJ_BOSS_POISE_HITS")) && atoi(e) >= 2 && atoi(e) <= 20) hits = atoi(e);
+        if ((e = getenv("CJ_BOSS_POISE_MS")) && atoi(e) >= 500 && atoi(e) <= 20000) ms = (uint64_t)atoi(e);
+        if (on) fprintf(stderr, "[COMBAT] boss poise: %d hits in a row, then %u ms without flinching\n", hits, (unsigned)ms);
+    }
+    if (!on) return;
+    now = xbox_HostNowNs();
+    for (i = 0; i < 128; i++) {
+        uint32_t a = *(volatile uint32_t *)(mem + VA_ACTOR_LIST + i * 0x18u + 0x10);
+        volatile uint32_t *sf;
+        uint32_t af;
+        if (a < 0x10000u || a + 0x960u >= 0x80000000u + g_xbox_contig_size) { who[i] = 0; ours[i] = 0; continue; }
+        if (a != who[i]) { who[i] = a; ours[i] = 0; until_ns[i] = 0; }   /* a new actor in this slot */
+        af = *(volatile uint32_t *)(mem + a + 0x940);
+        if (!(af & (1u << 15)) && !boss_bar(mem, a)) continue;   /* bosses only */
+        sf = (volatile uint32_t *)(mem + a + 0x93c);
+        if (ours[i]) {
+            if (now < until_ns[i]) { *sf |= 1u << 4; continue; }   /* keep it (a state may have cleared it) */
+            *sf &= ~(1u << 4);
+            ours[i] = 0;
+            gamelog_event("boss_poise", "\"actor\":%u,\"on\":0,\"hp\":%.0f", i, *(volatile float *)(mem + a + 0x7DC));
+            continue;
+        }
+        if (*sf & (1u << 4)) continue;   /* the game itself has hit reactions off right now */
+        if (*(volatile int32_t *)(mem + a + 0x860) + 1 >= hits) {
+            *sf |= 1u << 4;
+            ours[i] = 1;
+            until_ns[i] = now + ms * 1000000ull;
+            gamelog_event("boss_poise", "\"actor\":%u,\"on\":1,\"hp\":%.0f", i, *(volatile float *)(mem + a + 0x7DC));
+        }
+    }
 }
