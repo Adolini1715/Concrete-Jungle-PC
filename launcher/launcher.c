@@ -96,6 +96,7 @@ static const Setting S[] = {
     {"CJ_TEX_REPLACE", "Texture packs", "Use the HD packs in the textures folder.", 0, 1, 1, 1},
     {"CJ_MOUSE", "Mouse look", "Turn the camera with the mouse.", 0, 1, 1, 0},
     {"CJ_MOUSE_INVERT", "Invert mouse", "Mouse up looks down.", 0, 1, 1, 0},
+    {"CJ_CONTROLLER_ONLY", "Controller only", "Keyboard and mouse don't control the game (no stray shots while taking screenshots).", 0, 1, 1, 0},
     {"CJ_CAM_MODERN", "Modern camera", "The camera stops when you let go of the stick.", 0, 1, 1, 1},
     {"CJ_GLYPHS", "PC button prompts", "Keyboard or modern controller icons in game.", 0, 1, 1, 1},
     {"CJ_GL_SHADER_CACHE", "Shader cache", "Keeps compiled shaders so each one only stutters once.", 0, 1, 1, 1},

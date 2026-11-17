@@ -3497,7 +3497,12 @@ static void host_input(void)
     memset(&p, 0, sizeof p);
     {   /* keyboard and mouse bindings (src/keymap.c; rebindable on the Controller pages) */
         extern int femouse_menu_active(void);
-        keymap_pad(k, femouse_menu_active(), s_fem_wheel, &p.dig, p.ana);
+        /* CJ_CONTROLLER_ONLY=1 (launcher: Controller only): keyboard and mouse never drive the game,
+         * so a click or key press while taking a screenshot does not fire a weapon. Hotkeys (F9-F12,
+         * Alt+Enter) and the mouse in menus still work. */
+        static int ctl_only = -1;
+        if (ctl_only < 0) { const char *e = getenv("CJ_CONTROLLER_ONLY"); ctl_only = e && *e == '1'; }
+        if (!ctl_only || femouse_menu_active()) keymap_pad(k, femouse_menu_active(), s_fem_wheel, &p.dig, p.ana);
         {   static uint16_t last = 0xFFFF;   /* CJ_INPUT_LOG=1: the keyboard's pad buttons as they change */
             static int on = -1;
             if (on < 0) { const char *e = getenv("CJ_INPUT_LOG"); on = e && *e == '1'; }
