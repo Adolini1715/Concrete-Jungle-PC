@@ -50,6 +50,14 @@ now lives inside the folder you unzipped.
   (Scarface, Weapons and Gear, City Hunter, Alien Hunter, Ritual, Dark Blade and Bad Blood),
   one click each, checked against a known hash. Packs you already have can be switched on and off
   there.
+- **Drag and drop mods onto the launcher** (issue #4): drop a texture pack for this port, or a PS2
+  texture mod made for PCSX2 (a folder, zip, 7z or rar), on the launcher window. PS2 mods are
+  converted into packs you can switch on and off: PS2 alpha fixed, each texture resized to the Xbox
+  shape, Xbox transparency used where the PS2 cutouts were wrong. It knows the 1059 PS2 textures
+  the "Definitive Edition" remaster replaces; the remaster itself comes out as separate modules
+  (levels, characters, props and UI, each costume, and an Xbox-colours alternative that is off by
+  default). Multi-part rars need 7-Zip installed, or unpack them yourself and drop the folder. The
+  packs are for your own use: don't share them, point people to the mod's page.
 - **Report a Problem** collects the game's logs into one zip in the install's `logs` folder. Logs
   never contain your Windows user name.
 - **Compatibility mode** and an optional **Native renderer (experimental)** toggle in PC Settings.

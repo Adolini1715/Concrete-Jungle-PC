@@ -508,6 +508,121 @@ static void dl_queue(int i)
     if (SDL_AtomicCAS(&s_dl_busy, 0, 1)) SDL_DetachThread(SDL_CreateThread(dl_worker, "download", NULL));
 }
 
+/* ---------------------------------------------------------------- drag and drop
+ * A file or folder dropped on the window goes to installer/mods.py: a pack for this port is
+ * copied into textures, a PS2 texture mod (PCSX2 replacements, like the remaster) is converted
+ * into packs. Its STEP / PROGRESS / DONE / FAIL lines drive the box drawn over every page. */
+#define MAXDROP 16
+static char *s_drop[MAXDROP];
+static int s_ndrop;
+static SDL_atomic_t s_conv;            /* 0 idle, 1 working, 2 done, 3 failed */
+static SDL_atomic_t s_conv_pct;        /* -1 no figure */
+static char s_conv_line[256];          /* the last STEP, then the DONE / FAIL text */
+static SDL_mutex *s_conv_mx;
+
+static void conv_set(const char *t)
+{
+    SDL_LockMutex(s_conv_mx);
+    snprintf(s_conv_line, sizeof s_conv_line, "%s", t);
+    SDL_UnlockMutex(s_conv_mx);
+}
+
+static void conv_line(const char *line)
+{
+    long long a, b;
+    if (!strncmp(line, "STEP ", 5)) { conv_set(line + 5); SDL_AtomicSet(&s_conv_pct, -1); }
+    else if (sscanf(line, "PROGRESS %lld %lld", &a, &b) == 2 && b > 0) SDL_AtomicSet(&s_conv_pct, (int)(a * 100 / b));
+    else if (!strncmp(line, "DONE ", 5)) { conv_set(line + 5); SDL_AtomicSet(&s_conv, 2); }
+    else if (!strncmp(line, "FAIL ", 5)) { conv_set(line + 5); SDL_AtomicSet(&s_conv, 3); }
+}
+
+static int SDLCALL conv_worker(void *u)
+{
+    char **paths = u, cmd[8192], line[512];
+    int i, ll = 0;
+    size_t n;
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE rd, wr;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char buf[512];
+    DWORD got;
+    n = (size_t)snprintf(cmd, sizeof cmd, "\"%s\\installer\\python\\tools\\python.exe\" -I \"%s\\installer\\mods.py\" \"%s\"",
+                         s_repo, s_repo, s_dir);
+#else
+    FILE *p;
+    char buf[512];
+    size_t got;
+    n = (size_t)snprintf(cmd, sizeof cmd, "python3 -I '%s/installer/mods.py' '%s'", s_repo, s_dir);
+#endif
+    for (i = 0; paths[i] && n < sizeof cmd - 1; i++)
+#ifdef _WIN32
+        n += (size_t)snprintf(cmd + n, sizeof cmd - n, " \"%s\"", paths[i]);
+#else
+        n += (size_t)snprintf(cmd + n, sizeof cmd - n, " '%s'", paths[i]);
+#endif
+    for (i = 0; paths[i]; i++) SDL_free(paths[i]);
+    free(paths);
+    if (n >= sizeof cmd - 1) { conv_set("Too many files at once: drop fewer."); SDL_AtomicSet(&s_conv, 3); return 0; }
+#ifdef _WIN32
+    if (!CreatePipe(&rd, &wr, &sa, 0)) { conv_set("Couldn't start the converter."); SDL_AtomicSet(&s_conv, 3); return 0; }
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = si.hStdError = wr;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, s_repo, &si, &pi)) {
+        CloseHandle(rd); CloseHandle(wr);
+        conv_set("Couldn't start the converter (run Install.bat once).");
+        SDL_AtomicSet(&s_conv, 3);
+        return 0;
+    }
+    CloseHandle(wr);
+    while (ReadFile(rd, buf, sizeof buf, &got, NULL) && got) {
+#else
+    if (!(p = popen(cmd, "r"))) { conv_set("Couldn't start the converter."); SDL_AtomicSet(&s_conv, 3); return 0; }
+    while ((got = fread(buf, 1, sizeof buf, p)) > 0) {
+#endif
+        size_t k;
+        for (k = 0; k < (size_t)got; k++) {
+            if (buf[k] == '\n' || ll == (int)sizeof line - 1) { line[ll] = 0; conv_line(line); ll = 0; }
+            else if (buf[k] != '\r') line[ll++] = buf[k];
+        }
+    }
+#ifdef _WIN32
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(rd);
+#else
+    pclose(p);
+#endif
+    if (SDL_AtomicGet(&s_conv) == 1) { conv_set("The converter stopped without finishing."); SDL_AtomicSet(&s_conv, 3); }
+    SDL_AtomicSet(&s_rescan, 1);
+    return 0;
+}
+
+/* SDL_DROPCOMPLETE: hand what was dropped to the converter */
+static void drop_go(void)
+{
+    char **paths;
+    int i;
+    if (!s_ndrop) return;
+    if (SDL_AtomicGet(&s_conv) == 1 || !s_repo[0]) {
+        msg("%s", SDL_AtomicGet(&s_conv) == 1 ? "Still working on the last drop." : "Run Install.bat once to add mods.");
+        for (i = 0; i < s_ndrop; i++) SDL_free(s_drop[i]);
+        s_ndrop = 0;
+        return;
+    }
+    paths = calloc((size_t)s_ndrop + 1, sizeof *paths);
+    for (i = 0; i < s_ndrop; i++) paths[i] = s_drop[i];
+    s_ndrop = 0;
+    if (!s_conv_mx) s_conv_mx = SDL_CreateMutex();
+    conv_set("Starting");
+    SDL_AtomicSet(&s_conv_pct, -1);
+    SDL_AtomicSet(&s_conv, 1);
+    SDL_DetachThread(SDL_CreateThread(conv_worker, "mods", paths));
+}
+
 /* ---------------------------------------------------------------- actions */
 static int s_quit;
 #ifndef _WIN32
@@ -1219,7 +1334,37 @@ static void page_packs(void)
         text(&F_small, W - 40, H - 21, TXT_DIM, 2, s_av[r[s_sel].idx].about);
     } else {
         footer("Switch on / off", "Back");
-        text(&F_small, W - 40, H - 21, TXT_DIM, 2, "Downloaded and dropped-in packs apply the next time you play.");
+        text(&F_small, W - 40, H - 21, TXT_DIM, 2, "Drop a texture mod or pack on this window to add it.");
+    }
+}
+
+/* input: called before the page (a click closes a finished box); else draws it over the page */
+static void drop_box(int input)
+{
+    int st = SDL_AtomicGet(&s_conv), pct = SDL_AtomicGet(&s_conv_pct);
+    char line[256];
+    static Uint32 shown;
+    float x = 92, y = H - 140, w = W - 184;
+    if (!st) return;
+    if (st >= 2 && !shown) shown = SDL_GetTicks();
+    if (st >= 2 && (SDL_GetTicks() - shown > 20000 || (input && (mclick || k_ok || k_back)))) {
+        SDL_AtomicSet(&s_conv, 0);
+        shown = 0;
+        mclick = k_ok = k_back = 0;   /* the click closes the box and does nothing else */
+        return;
+    }
+    if (input) return;
+    SDL_LockMutex(s_conv_mx);
+    snprintf(line, sizeof line, "%s", s_conv_line);
+    SDL_UnlockMutex(s_conv_mx);
+    fill(x, y, w, 60, 0xE0101010u);
+    frame(x, y, w, 60, st == 3 ? 0xFFFF6A60u : RED);
+    text(&F_small, x + 16, y + 22, st == 3 ? 0xFFFF6A60u : (st == 2 ? 0xFF7AD07Au : TXT), 0,
+         st == 1 ? "ADDING A MOD" : st == 2 ? "DONE: packs apply the next time you play" : "COULDN'T ADD THAT");
+    text(&F_small, x + 16, y + 44, TXT_DIM, 0, line);
+    if (st == 1 && pct >= 0) {
+        fill(x + 16, y + 52, w - 32, 3, 0x40FFFFFFu);
+        fill(x + 16, y + 52, (w - 32) * pct / 100.0f, 3, RED);
     }
 }
 
@@ -1339,6 +1484,11 @@ int main(int argc, char **argv)
                 if (e.button.button == SDL_BUTTON_LEFT) { mx = e.button.x; my = e.button.y; mclick = 1; }
                 else if (e.button.button == SDL_BUTTON_RIGHT) k_back = 1;
                 break;
+            case SDL_DROPFILE:
+                if (s_ndrop < MAXDROP) s_drop[s_ndrop++] = e.drop.file;
+                else SDL_free(e.drop.file);
+                break;
+            case SDL_DROPCOMPLETE: drop_go(); if (s_page != PACKS) go(PACKS); break;
             case SDL_MOUSEWHEEL: if (e.wheel.y > 0) k_up = 1; else if (e.wheel.y < 0) k_down = 1; break;
             case SDL_KEYDOWN:
                 switch (e.key.keysym.sym) {
@@ -1371,11 +1521,13 @@ int main(int argc, char **argv)
             }
         }
         s_hot = 0;
+        drop_box(1);
         background(SDL_GetTicks() - t0, s_page != HOME);
         if (s_page == HOME) page_home();
         else if (s_page == SETTINGS) page_settings();
         else if (s_page == TESTS) page_tests();
         else page_packs();
+        drop_box(0);
         if (s_msg && SDL_GetTicks() - s_msg_t < 8000) {
             fill(0, H - 72, W, 26, 0xC0000000u);
             text(&F_small, 52, H - 54, 0xFFFFB0A0u, 0, s_msg);
