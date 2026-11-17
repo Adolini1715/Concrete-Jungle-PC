@@ -45,7 +45,8 @@ now lives inside the folder you unzipped.
 
 - **Launcher** (`launcher.exe`, and the desktop shortcut now opens it): Play, Update, PC Settings,
   Texture Packs, Check for Updates and Report a Problem. It is drawn with the game's own logo and
-  loading-screen art, read from your disc.
+  loading-screen art, read from your disc, and the game, launcher and shortcut get an icon made
+  from the menu's red clan glyph (also read from your disc; issue #5).
 - **HD texture packs from the launcher**: Texture Packs lists the packs available to download
   (Scarface, Weapons and Gear, City Hunter, Alien Hunter, Ritual, Dark Blade and Bad Blood),
   one click each, checked against a known hash. Packs you already have can be switched on and off
