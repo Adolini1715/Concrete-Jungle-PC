@@ -3544,9 +3544,26 @@ static void host_input(void)
          * The slot is picked in Options > PC Settings. */
         /* Once both bumpers are down the combo owns them until BOTH are fully up again, so
          * letting go of one before the other never reaches the game as a bumper press. */
-        static int held_up, held_down, armed;
+        static int held_up, held_down, armed, was[2], pend[2], pulse[2];
+        static Uint32 t_down[2];
+        Uint32 now = SDL_GetTicks();
+        int bi;
         if (p.ana[4] > 128 && p.ana[5] > 128) armed = 1;
         else if (armed && p.ana[4] <= 16 && p.ana[5] <= 16) armed = 0;
+        /* A bumper on its own is held back for 120 ms: if the other one joins in that time it is the
+         * combo and the game never sees either; if it is let go first, the game gets the tap then. */
+        for (bi = 0; bi < 2; bi++) {
+            int on = p.ana[4 + bi] > 128;
+            if (armed) { pend[bi] = pulse[bi] = 0; was[bi] = on; continue; }
+            if (on && !was[bi]) { t_down[bi] = now; pend[bi] = 1; }
+            if (pend[bi]) {
+                if (!on) { pend[bi] = 0; pulse[bi] = 3; }
+                else if (now - t_down[bi] < 120u) p.ana[4 + bi] = 0;
+                else pend[bi] = 0;
+            }
+            if (pulse[bi] > 0) { p.ana[4 + bi] = 255; pulse[bi]--; }
+            was[bi] = on;
+        }
         if (armed) {
             int up = (p.dig & 0x01) != 0, down = (p.dig & 0x02) != 0;
             if (up && !held_up) qs_request(1);
