@@ -3046,6 +3046,19 @@ static void gl_draw1(const Nv2aSurface *s, const Nv2aBatch *b)
     glUseProgram(s_cur->prog);
     glUniform2f(s_cur->u_size, (float)s_last->w, (float)s_last->h);
     apply_state(b->state);
+    {   /* Screen trails (CJ_GLOW_TRAILS=0, launcher: Screen trails Off). The game's glow (frame shrunk
+         * to 160x120) and its full-screen blur (frame copied to 256x256) blend each new frame over the
+         * previous contents of their small target (SRC_ALPHA, ONE_MINUS_SRC_ALPHA), so both carry a fading
+         * copy of earlier frames; laid back over the scene, it shows as a ghost of everything the camera
+         * moves past. Off: those copy steps replace the old contents, so the effects follow the scene.
+         * Matched by shape: a blended copy of a 512+ wide surface into a target at most half its size. */
+        static int trails = -1;
+        if (trails < 0) { const char *e = getenv("CJ_GLOW_TRAILS"); trails = !(e && *e == '0'); }
+        if (!trails && b->state->blend_enable && b->state->blend_src == 0x302 && b->state->blend_dst == 0x303
+            && s->width <= 320 && s->height <= 256 && b->stages[0] && b->stages[0]->width >= 512
+            && b->stages[0]->width >= s->width * 2 && b->stages[0]->height * 2 >= s->height * 3)
+            glDisable(GL_BLEND);
+    }
     apply_window_clip(s, b->state);
     scissor_guest((int)s->clip_x, (int)s->clip_y, (int)(s->clip_x + s->width), (int)(s->clip_y + s->height));
     memset(tx, 0, sizeof tx);

@@ -98,6 +98,7 @@ static const Setting S[] = {
     {"CJ_MOUSE_INVERT", "Invert mouse", "Mouse up looks down.", 0, 1, 1, 0},
     {"CJ_CONTROLLER_ONLY", "Controller only", "Keyboard and mouse don't control the game (no stray shots while taking screenshots).", 0, 1, 1, 0},
     {"CJ_CAM_MODERN", "Modern camera", "The camera stops when you let go of the stick.", 0, 1, 1, 1},
+    {"CJ_GLOW_TRAILS", "Screen trails", "The original glow and blur lag behind the camera, leaving a ghost when it moves. Off removes the lag.", 0, 1, 1, 1},
     {"CJ_GLYPHS", "PC button prompts", "Keyboard or modern controller icons in game.", 0, 1, 1, 1},
     {"CJ_GL_SHADER_CACHE", "Shader cache", "Keeps compiled shaders so each one only stutters once.", 0, 1, 1, 1},
     {"CJ_SAFE_RENDER", "Compatibility mode", "Turns off this version's renderer speedups. Try it if anything looks wrong.", 0, 1, 1, 0},
