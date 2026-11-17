@@ -4024,6 +4024,7 @@ static int8_t N_XItemHandler_Player__CheckForJump_0015faa0(gv::XItemHandler_Play
             return 0;
         }
         ::cjmod_run_charge_touch(0);
+        ::cjmod_charge_commit();
         if (self->m_CrouchTimer >= 0.1f) ::cjmod_crouch_hold_start();
         cjg::call_this<void>(cjg::Site(0x0015e100u, 0x0015fb43u), self, (uint32_t)(2), (uint32_t)(0), (float)(-1.0f));
         cjg::call_this<void>(cjg::Site(0x0014d440u, 0u, 0u, 0), self);
@@ -4065,7 +4066,7 @@ static void N_XItemHandler_Player__DoCrouch_001689c0(gv::XItemHandler_Player *se
     cjg::Frame F(0x4c, 4, cjg::Frame::Area{});
 {
     int modern = ::cjmod_move_modern();
-    if (modern && self->m_StickMag > 0.1f && (self->m_ButtonsPressed & 0x20) && !::cjmod_crouch_hold(0.0f)) {
+    if (modern && self->m_StickMag > 0.1f && (self->m_ButtonsPressed & 0x20) && !::cjmod_crouch_hold(0.0f) && !::cjmod_charge_committed()) {
         ::cjmod_run_charge_touch(1);
         cjg::call_this<void>(cjg::Site(0x0015e100u, 0x00168a17u, 0x1cu), self, (uint32_t)(1), (uint32_t)(0), (float)(-1.0f));
         return;
@@ -4110,7 +4111,7 @@ static void N_XItemHandler_Player__DoCrouch_001689c0(gv::XItemHandler_Player *se
         cjg::call_this<int8_t>(cjg::Site(0x00160880u, 0x00168b8bu, 0x14u, 0), self);
         return;
     }
-    if (self->m_ButtonsPressed & 0x20) {
+    if ((self->m_ButtonsPressed & 0x20) && !(modern && ::cjmod_charge_committed())) {
         self->m_CrouchTimer += cjg::call_cdecl<float>(cjg::Site(0x000af0b0u, 0u, 0u, 0));
         if (modern) ::cjmod_charge_feedback(self->m_CrouchTimer, (self->m_PredMsgFlags & 2) != 0, (self->m_PredMsgFlags & 0x10) != 0);
         cjg::call_this<int8_t>(cjg::Site(0x00160880u, 0x00168c56u, 0x8u, 0), self);

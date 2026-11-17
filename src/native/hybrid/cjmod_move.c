@@ -278,6 +278,13 @@ float cjmod_stop_frac(void)
  * the player ran (2026-10-28 session). 150 ms without a touch ends it (several frames even at 20 fps). */
 #define CHARGE_STALE_NS 150000000ull
 static int s_rc; static uint64_t s_rc_ns; static float s_crouch_hold;
+/* Bunny hop, the real one (session-20261116-230950, frame 68871): releasing a running charge starts a
+ * 0.1 s crouch before the launch; pressing jump again inside it carried the old charge on (DoCrouch's
+ * "button held: keep charging"), so a short second press launched at the first press's power plus its
+ * own. A released charge is committed: until the crouch ends in a jump, a new press cannot extend it. */
+static int s_committed;
+void cjmod_charge_commit(void) { s_committed = 1; }
+int cjmod_charge_committed(void) { return s_committed; }
 int cjmod_run_charging(void)
 {
     if (s_rc && xbox_HostNowNs() - s_rc_ns > CHARGE_STALE_NS) s_rc = 0;
@@ -315,6 +322,7 @@ static void charge_reset_tick(uint8_t *mem, uint32_t h)
         }
         if (*mode != 2 && *mode != 3) crouch_frames = 0;
     }
+    if (*mode != 2) s_committed = 0;
     if (!on || *mode == 2 || cjmod_run_charging()) return;
     if (*timer != 0.0f) {
         static int logged;
@@ -379,12 +387,13 @@ static void nan_guard_tick(uint8_t *mem, uint32_t h)
 
 /* How long jump must be held for the full-power jump. The original's 1/3 s made a slightly long tap
  * (0.35-0.45 s, easy while running with the button held) launch the full jump (James, 2026-11-16).
- * Modern movement: CJ_POWER_JUMP_MS, default 500. Classic: the original 1/3 s. */
+ * CJ_POWER_JUMP_MS (modern movement only). Default: the original 1/3 s; 500 ms felt less responsive
+ * in play (James, 2026-11-16), so it stays opt-in. Classic: always the original. */
 float cjmod_power_time(void)
 {
     static float t = -1.0f;
     if (!cjmod_move_modern()) return 0.33333334f;
-    if (t < 0.0f) { const char *e = getenv("CJ_POWER_JUMP_MS"); t = e && *e ? (float)atof(e) / 1000.0f : 0.5f; if (!(t >= 0.1f && t <= 2.0f)) t = 0.5f; }
+    if (t < 0.0f) { const char *e = getenv("CJ_POWER_JUMP_MS"); t = e && *e ? (float)atof(e) / 1000.0f : 0.33333334f; if (!(t >= 0.1f && t <= 2.0f)) t = 0.33333334f; }
     return t;
 }
 /* the run's target inertia (original curve) while charging: CJ_CHARGE_MOVE percent of its ground speed */

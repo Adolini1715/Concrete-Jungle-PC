@@ -42,6 +42,8 @@ extern "C" void cjmod_crouch_hold_start(void);
 extern "C" int cjmod_crouch_hold(float dt);
 extern "C" void cjmod_charge_feedback(float timer, int power_ok, int medium_ok);
 extern "C" float cjmod_power_time(void);
+extern "C" void cjmod_charge_commit(void);
+extern "C" int cjmod_charge_committed(void);
 extern "C" float cjmod_attack_carry(float mul);
 extern "C" float cjmod_turn_mult(void);
 extern "C" float cjmod_turn_cost(void);
@@ -284,6 +286,7 @@ signed char XItemHandler_Player::CheckForJump(signed char b)
             return 0;
         }
         cjmod_run_charge_touch(0);
+        cjmod_charge_commit();      // released: this charge launches; a new press cannot extend it
         if (m_CrouchTimer >= 0.1f) cjmod_crouch_hold_start();   // a real charge: show the crouch first; a tap jumps at once
         SetupMove(2, 0, -1.0f);     // DoCrouch launches on m_CrouchTimer (after the release crouch, if any)
         DeleteAllSwoosh();
@@ -321,7 +324,7 @@ signed char XItemHandler_Player::CheckForJump(signed char b)
 void XItemHandler_Player::DoCrouch()
 {
     int modern = cjmod_move_modern();
-    if (modern && m_StickMag > 0.1f && (m_ButtonsPressed & 0x20) && !cjmod_crouch_hold(0.0f)) {
+    if (modern && m_StickMag > 0.1f && (m_ButtonsPressed & 0x20) && !cjmod_crouch_hold(0.0f) && !cjmod_charge_committed()) {
         // a standing charge and the stick pushed: get up and run, the charge carries on (CheckForJump, running charge)
         cjmod_run_charge_touch(1);
         SetupMove(1, 0, -1.0f);
@@ -367,7 +370,7 @@ void XItemHandler_Player::DoCrouch()
         CheckForFall();
         return;
     }
-    if (m_ButtonsPressed & 0x20) {
+    if ((m_ButtonsPressed & 0x20) && !(modern && cjmod_charge_committed())) {
         m_CrouchTimer += XApp::FrameLength();
         if (modern) cjmod_charge_feedback(m_CrouchTimer, (m_PredMsgFlags & 2) != 0, (m_PredMsgFlags & 0x10) != 0);
         CheckForFall();

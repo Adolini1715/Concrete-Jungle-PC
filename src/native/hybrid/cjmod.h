@@ -78,6 +78,8 @@ void cjmod_crouch_hold_start(void);
 int cjmod_crouch_hold(float dt);
 void cjmod_charge_feedback(float timer, int power_ok, int medium_ok);
 float cjmod_power_time(void);
+void cjmod_charge_commit(void);
+int cjmod_charge_committed(void);
 float cjmod_attack_carry(float mul);
 /* Front-end mods: guest string block, host clock, quit. */
 char *cjmod_ui_block(void);
