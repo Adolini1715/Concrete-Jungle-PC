@@ -306,8 +306,10 @@ def shortcut(target, workdir):
         return None
     lnk = os.path.join(desktop, "Predator Concrete Jungle.lnk")
     ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:PCJ_LNK);"
-          "$s.TargetPath=$env:PCJ_TARGET;$s.WorkingDirectory=$env:PCJ_DIR;$s.Save()")
-    env = dict(os.environ, PCJ_LNK=lnk, PCJ_TARGET=target, PCJ_DIR=workdir)
+          "$s.TargetPath=$env:PCJ_TARGET;$s.WorkingDirectory=$env:PCJ_DIR;"
+          "if($env:PCJ_ICON){$s.IconLocation=$env:PCJ_ICON+',0'};$s.Save()")
+    ico = os.path.join(workdir, "launcher-art", "pcj.ico")   # the clan glyph, made from the player's disc
+    env = dict(os.environ, PCJ_LNK=lnk, PCJ_TARGET=target, PCJ_DIR=workdir, PCJ_ICON=ico if os.path.isfile(ico) else "")
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], env=env, capture_output=True)
     except OSError:

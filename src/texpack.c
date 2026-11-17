@@ -508,3 +508,7 @@ static const uint8_t *pack_find(uint64_t key, int *w, int *h)
     *w = r->w; *h = r->h;
     return r->rgba;
 }
+
+/* PNG file -> RGBA for other parts of the port (the window icon in gl_backend.c). */
+unsigned char *cj_png_load(const char *path, int *w, int *h) { int c; return stbi_load(path, w, h, &c, 4); }
+void cj_png_free(void *p) { stbi_image_free(p); }

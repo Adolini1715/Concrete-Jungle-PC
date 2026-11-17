@@ -1681,6 +1681,20 @@ static int init(void)
         s_win = SDL_CreateWindow("Predator: Concrete Jungle", SDL_WINDOWPOS_CENTERED,
                                  SDL_WINDOWPOS_CENTERED, (cj_widescreen() ? 2560 : 1920) * sc / 3, 480 * sc, fl);
     }
+    if (s_win) {   /* window icon: the red clan glyph the installer made from the player's disc */
+        extern unsigned char *cj_png_load(const char *path, int *w, int *h);
+        extern void cj_png_free(void *p);
+        char *bp = SDL_GetBasePath(), ip[1200];
+        int iw, ih;
+        unsigned char *ipx;
+        snprintf(ip, sizeof ip, "%slauncher-art/icon.png", bp ? bp : "");
+        if (bp) SDL_free(bp);
+        if ((ipx = cj_png_load(ip, &iw, &ih))) {
+            SDL_Surface *is = SDL_CreateRGBSurfaceFrom(ipx, iw, ih, 32, iw * 4, 0x000000FFu, 0x0000FF00u, 0x00FF0000u, 0xFF000000u);
+            if (is) { SDL_SetWindowIcon(s_win, is); SDL_FreeSurface(is); }
+            cj_png_free(ipx);
+        }
+    }
     if (!s_win || !(s_ctx = SDL_GL_CreateContext(s_win))) {
         fprintf(stderr, "[GL] window/context: %s\n", SDL_GetError());
         s_failed = 1;

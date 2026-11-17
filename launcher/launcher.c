@@ -1299,6 +1299,17 @@ int main(int argc, char **argv)
     }
     win = SDL_CreateWindow("Predator: Concrete Jungle PC", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
                            SDL_WINDOW_ALLOW_HIGHDPI);
+    if (win) {   /* window icon: the clan glyph made by tools/launcher_art.py from the player's disc */
+        char ip[1200];
+        int iw, ih, ic;
+        unsigned char *ipx;
+        snprintf(ip, sizeof ip, "%s" SEP "launcher-art" SEP "icon.png", s_dir);
+        if ((ipx = stbi_load(ip, &iw, &ih, &ic, 4))) {
+            SDL_Surface *is = SDL_CreateRGBSurfaceFrom(ipx, iw, ih, 32, iw * 4, 0x000000FFu, 0x0000FF00u, 0x00FF0000u, 0xFF000000u);
+            if (is) { SDL_SetWindowIcon(win, is); SDL_FreeSurface(is); }
+            stbi_image_free(ipx);
+        }
+    }
     R = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
     if (!R && win) R = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
     if (!R) return 1;
