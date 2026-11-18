@@ -1065,7 +1065,7 @@ enum { HOME, SETTINGS, PACKS, TESTS, EXPER };
 enum { A_PLAY, A_UPDATE, A_SETTINGS, A_PACKS, A_REPORT, A_QUIT, A_BACK, A_OPENTEX, A_CHECK, A_DECK, A_TESTS, A_EXPER };
 static int s_page, s_sel, s_top;
 static int mx, my, mclick, mmoved, s_hot;
-static int k_up, k_down, k_left, k_right, k_ok, k_back;
+static int k_up, k_down, k_left, k_right, k_ok, k_back, k_lang;   /* k_lang: Y / L switches the language */
 
 static void red_dots(float x, float y)
 {
@@ -1229,6 +1229,32 @@ static void go(int page)
 
 static int s_check_asked;   /* the player pressed Check for Updates: say how it went */
 
+/* EN | PT in the home page's top right: click it, or press Y / L. Same setting as PC Settings >
+ * Language (CJ_LANG): the launcher and the game's text follow it. */
+static void lang_toggle(void)
+{
+    int k, li = -1;
+    float x = W - 132, y = 22, w = 50, h = 26;
+    for (k = 0; k < NS; k++) if (!strcmp(S[k].key, "CJ_LANG")) li = k;
+    if (li < 0) return;
+    {
+        int over = mx >= x && mx < x + 2 * w && my >= y && my < y + h;
+        if (over) s_hot = 1;
+        if (k_lang || (over && mclick)) {
+            s_val[li] = !s_val[li];
+            s_ini_dirty = 1;
+            ini_save();
+            mclick = 0;
+        }
+    }
+    for (k = 0; k < 2; k++) {
+        int on = s_val[li] == k;
+        fill(x + k * w, y, w, h, on ? RED : 0xA0101010u);
+        frame(x + k * w, y, w, h, on ? RED : 0x60FFFFFFu);
+        text(&F_small, x + k * w + w / 2, y + 18, on ? 0xFFFFFFFFu : TXT_DIM, 1, k ? "PT" : "EN");
+    }
+}
+
 static void page_home(void)
 {
     Row r[10];
@@ -1274,6 +1300,7 @@ static void page_home(void)
     if (k_back) s_quit = 1;
     footer("Select", "Quit");
     status_box();
+    lang_toggle();
 }
 
 /* PC Settings (exper 0) or its Experimental page (exper 1): the settings marked exp go on the second */
@@ -1584,7 +1611,7 @@ int main(int argc, char **argv)
     while (!s_quit) {
         SDL_Event e;
         mclick = mmoved = 0;
-        k_up = k_down = k_left = k_right = k_ok = k_back = 0;
+        k_up = k_down = k_left = k_right = k_ok = k_back = k_lang = 0;
         while (SDL_PollEvent(&e)) {
             switch (e.type) {
             case SDL_QUIT: s_quit = 1; break;
@@ -1607,6 +1634,7 @@ int main(int argc, char **argv)
                 case SDLK_RIGHT: case SDLK_d: k_right = 1; break;
                 case SDLK_RETURN: case SDLK_SPACE: case SDLK_KP_ENTER: k_ok = 1; break;
                 case SDLK_ESCAPE: case SDLK_BACKSPACE: k_back = 1; break;
+                case SDLK_l: k_lang = 1; break;
                 }
                 break;
             case SDL_CONTROLLERDEVICEADDED: if (!pad) pad = SDL_GameControllerOpen(e.cdevice.which); break;
@@ -1618,6 +1646,7 @@ int main(int argc, char **argv)
                 case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: k_right = 1; break;
                 case SDL_CONTROLLER_BUTTON_A: case SDL_CONTROLLER_BUTTON_START: k_ok = 1; break;
                 case SDL_CONTROLLER_BUTTON_B: case SDL_CONTROLLER_BUTTON_BACK: k_back = 1; break;
+                case SDL_CONTROLLER_BUTTON_Y: k_lang = 1; break;
                 }
                 break;
             case SDL_CONTROLLERAXISMOTION: {   /* left stick as a d-pad, one step per push */
