@@ -102,13 +102,105 @@ static const Setting S[] = {
     {"CJ_LANG", "Language", "Text language. Portuguese reads the translation from the lang\\pt-br folder.", 0, 1, 1, 0},
     {"CJ_GLYPHS", "PC button prompts", "Keyboard or modern controller icons in game.", 0, 1, 1, 1},
     {"CJ_GL_SHADER_CACHE", "Shader cache", "Keeps compiled shaders so each one only stutters once.", 0, 1, 1, 1},
-    {"CJ_SAFE_RENDER", "Compatibility mode", "Turns off this version's renderer speedups. Try it if anything looks wrong.", 0, 1, 1, 0},
+    {"CJ_SAFE_RENDER", "Compatibility mode", "Turns off this version's renderer speedups. Try it if anything looks wrong.", 0, 1, 1, 0, 1},
     {"CJ_API_TAKEOVER", "Native renderer", "May run faster. Draws from the game's own calls. Turn off if anything looks wrong.", 0, 1, 1, 0, 1},
     {"CJ_BOSS_POISE", "Boss poise", "Bosses stop flinching for a few seconds after a quick run of hits, so they can't be stun-locked.", 0, 1, 1, 0, 1},
-    {"CJ_TEST_CAPTURE", "Test captures", "Records 3 short frame captures per session for bug reports.", 0, 1, 1, 0},
+    {"CJ_TEST_CAPTURE", "Test captures", "Records 3 short frame captures per session for bug reports.", 0, 1, 1, 0, 1},
 };
 #define NS ((int)(sizeof S / sizeof S[0]))
 static int s_val[NS], s_ini_dirty;
+
+/* ---------------------------------------------------------------- launcher language
+ * The launcher follows the Language setting (CJ_LANG): in Portuguese every string drawn through
+ * text() / text_w() / msg() is looked up here by its English text. Written in UTF-8, converted to
+ * Latin-1 (what the baked font covers) on first use. */
+static const char *const k_pt[][2] = {
+    {"Play", "Jogar"}, {"Quit", "Sair"}, {"Back", "Voltar"}, {"Select", "Selecionar"}, {"Change", "Alterar"},
+    {"On", "Ligado"}, {"Off", "Desligado"}, {"English", "Inglês"},
+    {"PC Settings", "Configurações do PC"}, {"Texture Packs", "Pacotes de texturas"}, {"Check for Updates", "Procurar atualizações"},
+    {"Performance Tests", "Testes de desempenho"}, {"Report a Problem", "Relatar um problema"}, {"Experimental", "Experimental"},
+    {"PC SETTINGS", "CONFIGURAÇÕES DO PC"}, {"EXPERIMENTAL", "EXPERIMENTAL"}, {"TEXTURE PACKS", "PACOTES DE TEXTURAS"},
+    {"PERFORMANCE TESTS", "TESTES DE DESEMPENHO"}, {"AVAILABLE TO DOWNLOAD", "DISPONÍVEIS PARA BAIXAR"}, {"VERSION", "VERSÃO"},
+    {"Frame rate", "Taxa de quadros"}, {"60 fps, or 30 like the original.", "60 fps, ou 30 como no original."},
+    {"Resolution scale", "Escala de resolução"}, {"1 = 640x480 (original) ... 3 = 1440p ... 5 = 4K.", "1 = 640x480 (original) ... 3 = 1440p ... 5 = 4K."},
+    {"Widescreen", "Widescreen"}, {"The game's own 16:9 mode.", "O modo 16:9 do próprio jogo."},
+    {"Fullscreen", "Tela cheia"}, {"Desktop fullscreen. F11 or Alt+Enter in game too.", "Tela cheia da área de trabalho. F11 ou Alt+Enter também no jogo."},
+    {"V-Sync", "V-Sync"}, {"Sync to the monitor. Off has the lowest input lag.", "Sincroniza com o monitor. Desligado tem o menor atraso de comandos."},
+    {"Texture packs", "Pacotes de texturas"}, {"Use the HD packs in the textures folder.", "Usa os pacotes HD da pasta textures."},
+    {"Mouse look", "Câmera com mouse"}, {"Turn the camera with the mouse.", "Gira a câmera com o mouse."},
+    {"Invert mouse", "Inverter mouse"}, {"Mouse up looks down.", "Mouse para cima olha para baixo."},
+    {"Controller only", "Só controle"}, {"Keyboard and mouse don't control the game (no stray shots while taking screenshots).",
+                                         "Teclado e mouse não controlam o jogo (sem tiros acidentais ao tirar capturas de tela)."},
+    {"Modern camera", "Câmera moderna"}, {"The camera stops when you let go of the stick.", "A câmera para quando você solta o analógico."},
+    {"Screen trails", "Rastro na tela"}, {"The original glow and blur lag behind the camera, leaving a ghost when it moves. Off removes the lag.",
+                                          "O brilho e o desfoque originais ficam atrás da câmera e deixam um fantasma quando ela se move. Desligado remove o atraso."},
+    {"Language", "Idioma"}, {"Text language. Portuguese reads the translation from the lang\\pt-br folder.", "Idioma dos textos. Português usa a tradução da pasta lang\\pt-br."},
+    {"PC button prompts", "Botões de PC"}, {"Keyboard or modern controller icons in game.", "Ícones de teclado ou de controle moderno no jogo."},
+    {"Shader cache", "Cache de shaders"}, {"Keeps compiled shaders so each one only stutters once.", "Guarda os shaders compilados para cada um travar só uma vez."},
+    {"Compatibility mode", "Modo de compatibilidade"}, {"Turns off this version's renderer speedups. Try it if anything looks wrong.",
+                                                         "Desliga as otimizações de renderização desta versão. Tente se algo parecer errado."},
+    {"Native renderer", "Renderizador nativo"}, {"May run faster. Draws from the game's own calls. Turn off if anything looks wrong.",
+                                                  "Pode rodar mais rápido. Desenha a partir das chamadas do próprio jogo. Desligue se algo parecer errado."},
+    {"Boss poise", "Postura dos chefes"}, {"Bosses stop flinching for a few seconds after a quick run of hits, so they can't be stun-locked.",
+                                           "Chefes param de recuar por alguns segundos após uma sequência rápida de golpes, para não ficarem presos atordoados."},
+    {"Test captures", "Capturas de teste"}, {"Records 3 short frame captures per session for bug reports.", "Grava 3 capturas curtas por sessão para relatórios de erros."},
+    {"Apply Steam Deck preset", "Aplicar predefinição do Steam Deck"}, {"Steam Deck preset applied.%s", "Predefinição do Steam Deck aplicada.%s"},
+    {"60 fps, 2x, fullscreen, V-Sync, controller prompts, regular renderer.", "60 fps, 2x, tela cheia, V-Sync, botões de controle, renderizador normal."},
+    {"Settings still being tested. Turn one off if anything looks wrong.", "Opções ainda em teste. Desligue uma se algo parecer errado."},
+    {"Steam Deck detected: Deck settings applied.%s", "Steam Deck detectado: configurações do Deck aplicadas.%s"}, {" Change them in PC Settings.", " Altere-as em Configurações do PC."},
+    {"Checking for updates", "Procurando atualizações"}, {"Up to date", "Atualizado"}, {"Update available: %s", "Atualização disponível: %s"},
+    {"Could not reach GitHub", "Não foi possível acessar o GitHub"}, {"Linux test build: update by copying a new build in", "Versão de teste para Linux: atualize copiando uma nova versão"},
+    {"Run Install.bat once to enable updates", "Execute o Install.bat uma vez para ativar as atualizações"},
+    {"Update to %s", "Atualizar para %s"}, {"You have the latest version.%s", "Você tem a versão mais recente.%s"},
+    {"A new version is ready: choose Update to %s", "Uma nova versão está pronta: escolha Atualizar para %s"},
+    {"Could not reach GitHub.%s", "Não foi possível acessar o GitHub.%s"}, {" Check the internet connection.", " Verifique a conexão com a internet."},
+    {"Linux test build: copy the new build's files into this folder%s", "Versão de teste para Linux: copie os arquivos da nova versão para esta pasta%s"},
+    {"Updates need the install folder.%s", "As atualizações precisam da pasta de instalação.%s"}, {" Run Install.bat once.", " Execute o Install.bat uma vez."},
+    {"Test 1: Regular renderer", "Teste 1: Renderizador normal"}, {"The regular renderer with the new buffer streaming.", "O renderizador normal com o novo envio de buffers."},
+    {"Test 2: Regular, old buffers", "Teste 2: Normal, buffers antigos"}, {"The same, with the new buffer streaming off, to compare with test 1.", "O mesmo, com o novo envio de buffers desligado, para comparar com o teste 1."},
+    {"Test 3: Native renderer", "Teste 3: Renderizador nativo"}, {"The experimental native renderer.", "O renderizador nativo experimental."},
+    {"Same save and spot each time, about two minutes, then quit.", "Mesmo save e mesmo lugar toda vez, cerca de dois minutos, depois saia."},
+    {"Start test", "Iniciar teste"}, {"Get  %s", "Baixar  %s"}, {"Get all of them", "Baixar todos"}, {"Open the textures folder", "Abrir a pasta textures"},
+    {"Downloading %d%%", "Baixando %d%%"}, {"Failed: try again", "Falhou: tente de novo"}, {"Looking for packs to download...", "Procurando pacotes para baixar..."},
+    {"No packs yet.", "Nenhum pacote ainda."}, {"Download", "Baixar"}, {"Switch on / off", "Ligar / desligar"},
+    {"Drop a texture mod or pack on this window to add it.", "Solte um mod de texturas ou pacote nesta janela para adicioná-lo."},
+    {"ADDING A MOD", "ADICIONANDO UM MOD"}, {"DONE: packs apply the next time you play", "PRONTO: os pacotes valem na próxima vez que você jogar"},
+    {"COULDN'T ADD THAT", "NÃO FOI POSSÍVEL ADICIONAR"}, {"Still working on the last drop.", "Ainda processando o último arquivo."},
+    {"Run Install.bat once to add mods.", "Execute o Install.bat uma vez para adicionar mods."},
+    {"Too many files at once: drop fewer.", "Arquivos demais de uma vez: solte menos."}, {"Couldn't start the converter.", "Não foi possível iniciar o conversor."},
+    {"Couldn't start the converter (run Install.bat once).", "Não foi possível iniciar o conversor (execute o Install.bat uma vez)."},
+    {"The converter stopped without finishing.", "O conversor parou sem terminar."},
+    {"Could not move %s (is the game running?)", "Não foi possível mover %s (o jogo está aberto?)"},
+    {"Could not start pcj.exe%s", "Não foi possível iniciar o pcj.exe%s"}, {" (is it next to the launcher?)", " (ele está ao lado do launcher?)"},
+    {"The install folder is missing%s", "A pasta de instalação não foi encontrada%s"}, {": download the latest release and run Install.bat", ": baixe a versão mais recente e execute o Install.bat"},
+    {"Could not start %s", "Não foi possível iniciar %s"}, {"No game logs yet%s", "Ainda não há registros do jogo%s"}, {": play once, then report", ": jogue uma vez e depois relate"},
+    {"Could not write %s", "Não foi possível gravar %s"}, {"Saved %s: attach it to the issue that just opened", "%s salvo: anexe-o ao relatório que acabou de abrir"},
+};
+static int s_ui_pt;   /* set from the Language setting (see val_str's caller) */
+static void l1(const char *u, char *o, size_t n)   /* UTF-8 -> Latin-1 */
+{
+    const unsigned char *p = (const unsigned char *)u;
+    size_t k = 0;
+    while (*p && k + 1 < n) {
+        if (*p < 0x80) o[k++] = (char)*p++;
+        else if ((*p & 0xE0) == 0xC0 && p[1]) { o[k++] = (char)(((p[0] & 0x1F) << 6) | (p[1] & 0x3F)); p += 2; }
+        else { o[k++] = '?'; p++; while ((*p & 0xC0) == 0x80) p++; }
+    }
+    o[k] = 0;
+}
+static const char *tr(const char *s)
+{
+    static char *conv[sizeof k_pt / sizeof k_pt[0]];
+    size_t i;
+    if (!s_ui_pt || !s) return s;
+    for (i = 0; i < sizeof k_pt / sizeof k_pt[0]; i++)
+        if (!strcmp(s, k_pt[i][0])) {
+            if (!conv[i]) { size_t n = strlen(k_pt[i][1]) + 1; if ((conv[i] = malloc(n))) l1(k_pt[i][1], conv[i], n); }
+            return conv[i] ? conv[i] : s;
+        }
+    return s;
+}
+
 
 static void ini_load(void)
 {
@@ -314,7 +406,7 @@ static Uint32 s_msg_t;
 
 static void msg(const char *fmt, const char *a)
 {
-    snprintf(s_msgbuf, sizeof s_msgbuf, fmt, a ? a : "");
+    snprintf(s_msgbuf, sizeof s_msgbuf, tr(fmt), a ? tr(a) : "");
     s_msg = s_msgbuf;
     s_msg_t = SDL_GetTicks();
 }
@@ -819,9 +911,10 @@ static void act_report(void)
 #endif
 }
 
+
 /* ---------------------------------------------------------------- drawing */
 static SDL_Renderer *R;
-typedef struct { stbtt_bakedchar ch[96]; SDL_Texture *tex; int px; } Font;
+typedef struct { stbtt_bakedchar ch[224]; SDL_Texture *tex; int px; } Font;   /* 32..255: Latin-1 */
 static Font F_title, F_big, F_ui, F_small;
 
 static int font_bake(Font *f, const unsigned char *ttf, float px)
@@ -830,7 +923,8 @@ static int font_bake(Font *f, const unsigned char *ttf, float px)
     unsigned char *a = malloc((size_t)tw * th);
     Uint32 *rgba = malloc((size_t)tw * th * 4);
     f->px = (int)px;
-    stbtt_BakeFontBitmap(ttf, stbtt_GetFontOffsetForIndex(ttf, 0), px, a, tw, th, 32, 96, f->ch);
+    memset(a, 0, (size_t)tw * th);
+    stbtt_BakeFontBitmap(ttf, stbtt_GetFontOffsetForIndex(ttf, 0), px, a, tw, th, 32, 224, f->ch);
     for (i = 0; i < tw * th; i++) rgba[i] = 0x00FFFFFFu | ((Uint32)a[i] << 24);
     f->tex = SDL_CreateTexture(R, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, tw, th);
     SDL_UpdateTexture(f->tex, NULL, rgba, tw * 4);
@@ -844,7 +938,8 @@ static float text_w(Font *f, const char *s)
 {
     float x = 0, y = 0;
     stbtt_aligned_quad q;
-    for (; *s; s++) if (*s >= 32 && *s < 128) stbtt_GetBakedQuad(f->ch, 1024, 1024, *s - 32, &x, &y, &q, 1);
+    const unsigned char *u = (const unsigned char *)tr(s);
+    for (; *u; u++) if (*u >= 32 && (*u < 128 || *u >= 160)) stbtt_GetBakedQuad(f->ch, 1024, 1024, *u - 32, &x, &y, &q, 1);
     return x;
 }
 
@@ -852,14 +947,17 @@ static float text_w(Font *f, const char *s)
 static void text(Font *f, float x, float y, Uint32 col, int align, const char *s)
 {
     stbtt_aligned_quad q;
+    const unsigned char *u;
     if (align) x -= text_w(f, s) * (align == 1 ? 0.5f : 1.0f);
+    s = tr(s);
+    u = (const unsigned char *)s;
     SDL_SetTextureColorMod(f->tex, col >> 16 & 255, col >> 8 & 255, col & 255);
     SDL_SetTextureAlphaMod(f->tex, col >> 24 & 255);
-    for (; *s; s++) {
+    for (; *u; u++) {
         SDL_Rect src;
         SDL_FRect dst;
-        if (*s < 32 || *s >= 128) continue;
-        stbtt_GetBakedQuad(f->ch, 1024, 1024, *s - 32, &x, &y, &q, 1);
+        if (*u < 32 || (*u >= 128 && *u < 160)) continue;
+        stbtt_GetBakedQuad(f->ch, 1024, 1024, *u - 32, &x, &y, &q, 1);
         src.x = (int)(q.s0 * 1024 + 0.5f); src.y = (int)(q.t0 * 1024 + 0.5f);
         src.w = (int)((q.s1 - q.s0) * 1024 + 0.5f); src.h = (int)((q.t1 - q.t0) * 1024 + 0.5f);
         dst.x = q.x0; dst.y = q.y0; dst.w = q.x1 - q.x0; dst.h = q.y1 - q.y0;
@@ -1003,7 +1101,7 @@ static void status_box(void)
     text(&F_small, W - 40, y, TXT_DIM, 2, line);
     if (st == 0) snprintf(line, sizeof line, "Checking for updates");
     else if (st == 1) snprintf(line, sizeof line, "Up to date");
-    else if (st == 2) snprintf(line, sizeof line, "Update available: %s", s_upd_tag);
+    else if (st == 2) snprintf(line, sizeof line, tr("Update available: %s"), s_upd_tag);
     else if (st == 3) snprintf(line, sizeof line, "Could not reach GitHub");
     else if (st == 5) snprintf(line, sizeof line, "Linux test build: update by copying a new build in");
     else snprintf(line, sizeof line, "Run Install.bat once to enable updates");
@@ -1043,7 +1141,7 @@ static int rows(const Row *r, int n, float x, float y, float dy, Font *f, float 
 static const char *val_str(int i)
 {
     static char b[32];
-    if (!strcmp(S[i].key, "CJ_LANG")) return s_val[i] ? "Portugues (Brasil)" : "English";
+    if (!strcmp(S[i].key, "CJ_LANG")) { static char pt[32]; l1("Português (Brasil)", pt, sizeof pt); return s_val[i] ? pt : "English"; }
     if (S[i].lo == 0 && S[i].hi == 1) return s_val[i] ? "On" : "Off";
     if (!strcmp(S[i].key, "CJ_GL_SCALE")) {
         static const char *r[] = {"", "1x  (640x480)", "2x  (1280x960)", "3x  (1440p)", "4x  (2560x1920)", "5x  (4K)"};
@@ -1139,7 +1237,7 @@ static void page_home(void)
     int tests = is_steam_deck() || (getenv("CJ_PERF_TESTS") && *getenv("CJ_PERF_TESTS") == '1');
     static char ulabel[80];
     r[n++] = (Row){"Play", 0, A_PLAY};
-    if (upd) { snprintf(ulabel, sizeof ulabel, "Update to %s", s_upd_tag); r[n++] = (Row){ulabel, 0, A_UPDATE}; }
+    if (upd) { snprintf(ulabel, sizeof ulabel, tr("Update to %s"), s_upd_tag); r[n++] = (Row){ulabel, 0, A_UPDATE}; }
     r[n++] = (Row){"PC Settings", 0, A_SETTINGS};
     r[n++] = (Row){"Texture Packs", 0, A_PACKS};
     r[n++] = (Row){"Check for Updates", 0, A_CHECK};
@@ -1291,7 +1389,7 @@ static void page_packs(void)
         for (i = 0; i < s_nav && n < 96; i++) {
             if (s_av[i].installed && SDL_AtomicGet(&s_dl_state[i]) != 3) continue;
             if (first_av < 0) { first_av = n; r[n] = (Row){"AVAILABLE TO DOWNLOAD", 4, 0}; n++; }
-            snprintf(lab[n], sizeof lab[n], "Get  %s", s_av[i].name);
+            snprintf(lab[n], sizeof lab[n], tr("Get  %s"), s_av[i].name);
             r[n] = (Row){lab[n], 3, i};
             n++;
             if (!s_av[i].installed) want++;
@@ -1312,7 +1410,7 @@ static void page_packs(void)
         } else if (r[i].kind == 3) {
             int k = r[i].idx, st = SDL_AtomicGet(&s_dl_state[k]);
             char sz[48];
-            if (st == 2) snprintf(sz, sizeof sz, "Downloading %d%%", SDL_AtomicGet(&s_dl_pct[k]));
+            if (st == 2) snprintf(sz, sizeof sz, tr("Downloading %d%%"), SDL_AtomicGet(&s_dl_pct[k]));
             else if (st == 1) snprintf(sz, sizeof sz, "Waiting");
             else if (st == 3) snprintf(sz, sizeof sz, "Installed");
             else if (st == 4) snprintf(sz, sizeof sz, "Failed: try again");
@@ -1532,6 +1630,10 @@ int main(int argc, char **argv)
             }
         }
         s_hot = 0;
+        {   /* the launcher's own language follows the Language setting */
+            int k;
+            for (k = 0; k < NS; k++) if (!strcmp(S[k].key, "CJ_LANG")) s_ui_pt = s_val[k] == 1;
+        }
         drop_box(1);
         background(SDL_GetTicks() - t0, s_page != HOME);
         if (s_page == HOME) page_home();
