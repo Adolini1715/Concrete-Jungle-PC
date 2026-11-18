@@ -1184,7 +1184,8 @@ static void page_settings_list(int exper)
     int step;
     for (i = 0; i < NS; i++) if (S[i].exp == exper) vis[nv++] = i;
     nr = nv + 1 + deck + !exper;   /* + the Deck preset row (only on a Deck), + Experimental, + Back */
-    step = nr > 14 ? 21 : nr > 13 ? 22 : 24;            /* more rows: tighter, Back stays above the footer */
+    step = (H - 62 - 186) / (nr > 1 ? nr - 1 : 1);       /* more rows: tighter, Back stays above the footer */
+    if (step > 24) step = 24;
     text(&F_ui, 92, 160, RED, 0, exper ? "EXPERIMENTAL" : "PC SETTINGS");
     for (i = 0; i < nv; i++) r[i] = (Row){S[vis[i]].label, 1, vis[i]};
     if (deck) r[nv] = (Row){"Apply Steam Deck preset", 0, A_DECK};
