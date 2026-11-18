@@ -2732,6 +2732,47 @@ static GLuint self_copy(Rt *r)
     return s_self_tex;
 }
 
+/* Resolution Scale and the game's blur and glow. The glow, the full-screen blur and the focus
+ * blur shrink the frame into small targets (256x256, 160x120, 320x240 ...) and smooth them with a
+ * few bilinear taps half a guest texel apart, which at the original resolution blend neighbouring
+ * pixels. At 2x-5x the source holds 2-5 times the texels, so the same taps land on single sharp
+ * texels: thin bright things (the rain streaks of the main menu) came out as rows of offset copies,
+ * a ghost that was not there at scale 1. A draw into a target narrower than 640 that samples a
+ * surface the GPU drew samples a guest-sized copy of it instead (one sample per guest pixel, at the
+ * pixel centre as the original raster took it), so those passes compute what the Xbox did.
+ * CJ_GL_FX_GUEST_RES=0 turns it off. */
+static GLuint s_lo_fbo[4], s_lo_tex[4];
+static uint32_t s_lo_w[4], s_lo_h[4];
+static int s_lo_on = -1;
+static uint64_t s_lo_copies;
+static int lo_wanted(const Rt *r)
+{
+    if (s_lo_on < 0) s_lo_on = !getenv("CJ_GL_FX_GUEST_RES") || atoi(getenv("CJ_GL_FX_GUEST_RES")) != 0;
+    return s_lo_on && s_rs > 1 && s_last && r && s_last->w < 640 && s_last->cw < 640;
+}
+static void lo_copy(int st, Rt *r)
+{
+    GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+    if (!s_lo_tex[st]) { glGenTextures(1, &s_lo_tex[st]); glGenFramebuffers(1, &s_lo_fbo[st]); }
+    glBindTexture(GL_TEXTURE_2D, s_lo_tex[st]);
+    if (s_lo_w[st] != r->w || s_lo_h[st] != r->h) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, r->w, r->h, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_lo_fbo[st]);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_lo_tex[st], 0);
+        s_lo_w[st] = r->w; s_lo_h[st] = r->h;
+    }
+    if (sc) glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, r->fbo2[s_side]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_lo_fbo[st]);
+    /* odd scales: the centre texel of each block; even ones: the middle 2x2 averaged */
+    glBlitFramebuffer(0, 0, r->w * s_rs, r->h * s_rs, 0, 0, r->w, r->h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_last->fbo2[s_side]);
+    if (sc) glEnable(GL_SCISSOR_TEST);
+    glBindTexture(GL_TEXTURE_2D, s_lo_tex[st]);
+    s_lo_copies++;
+}
+
 /* A texture over a zeta surface: the title reading its depth buffer as
  * colour. PCJ's focus blur samples its D24S8 z-buffer as a linear A8B8G8R8
  * texture (stencil in R, depth bits 0-7, 8-15, 16-23 in G, B, A) and turns
@@ -2900,7 +2941,9 @@ static int bind_stage(int st, const Nv2aTexture *t, float tx[4], float *aone)
     if (s_rtt && (r = rt_for_texture(t, &x0, &y0)) && (r != s_last || s_self_on)) {
         cj_api_check_rtt(r->va, t->offset, 0);
         dump_src(r);
-        if (r == s_last)
+        if (lo_wanted(r))
+            lo_copy(st, r);  /* binds a guest-sized copy on this unit */
+        else if (r == s_last)
             self_copy(r);   /* binds the copy on this unit */
         else
             glBindTexture(GL_TEXTURE_2D, r->color2[s_side]);
@@ -3070,12 +3113,20 @@ static void gl_draw1(const Nv2aSurface *s, const Nv2aBatch *b)
          * previous contents of their small target (SRC_ALPHA, ONE_MINUS_SRC_ALPHA), so both carry a fading
          * copy of earlier frames; laid back over the scene, it shows as a ghost of everything the camera
          * moves past. Off: those copy steps replace the old contents, so the effects follow the scene.
-         * Matched by shape: a blended copy of a 512+ wide surface into a target at most half its size. */
+         * Matched by shape: a blended copy of a 512+ wide surface into a target at most half its size.
+         * The glow's later steps (160x120 blurred into a second 160x120, then 80x60, 40x30 ...) start
+         * the same way: their first draw of the frame blends a copy of the step before over what the
+         * target held last frame (these targets are never cleared), so each step kept a trail of its
+         * own. Off also replaces there: a blended first draw this frame into a small target, sampling
+         * a surface the GPU drew. */
         static int trails = -1;
+        uint32_t ux, uy;
         if (trails < 0) { const char *e = getenv("CJ_GLOW_TRAILS"); trails = !(e && *e == '0'); }
         if (!trails && b->state->blend_enable && b->state->blend_src == 0x302 && b->state->blend_dst == 0x303
-            && s->width <= 320 && s->height <= 256 && b->stages[0] && b->stages[0]->width >= 512
-            && b->stages[0]->width >= s->width * 2 && b->stages[0]->height * 2 >= s->height * 3)
+            && s->width <= 320 && s->height <= 256 && b->stages[0]
+            && ((b->stages[0]->width >= 512 && b->stages[0]->width >= s->width * 2 && b->stages[0]->height * 2 >= s->height * 3)
+                || (s_last->nd_flip == 1 && s_rtt && rt_for_texture(b->stages[0], &ux, &uy) != NULL
+                    && rt_for_texture(b->stages[0], &ux, &uy) != s_last)))
             glDisable(GL_BLEND);
     }
     apply_window_clip(s, b->state);
