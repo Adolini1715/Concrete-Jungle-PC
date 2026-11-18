@@ -1243,6 +1243,7 @@ static void lang_toggle(void)
         if (over) s_hot = 1;
         if (k_lang || (over && mclick)) {
             s_val[li] = !s_val[li];
+            s_ui_pt = s_val[li] == 1;
             s_ini_dirty = 1;
             ini_save();
             if (s_val[li]) {   /* the translation is a download (Texture Packs) */
@@ -1447,6 +1448,7 @@ static void page_packs(void)
             else if (st == 1) snprintf(sz, sizeof sz, "Waiting");
             else if (st == 3) snprintf(sz, sizeof sz, "Installed");
             else if (st == 4) snprintf(sz, sizeof sz, "Failed: try again");
+            else if (s_av[k].size < 1048576) snprintf(sz, sizeof sz, "%.0f KB", s_av[k].size / 1024.0);
             else snprintf(sz, sizeof sz, "%.0f MB", s_av[k].size / 1048576.0);
             text(&F_small, 580, ry - 2, st == 4 ? 0xFFFF6A60u : (st == 3 ? 0xFF7AD07Au : TXT_DIM), 2, sz);
             if (st == 2) {   /* progress bar under the row */
