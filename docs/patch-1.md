@@ -9,8 +9,8 @@ faster.
 - **Quick saves and pause-menu saves from v0.1 will not load.** They are snapshots of the running
   game and only load in the build that made them. Your chapter progress, unlocks and settings (the
   game's own save) are kept. Finish or abandon a mid-chapter save before updating.
-- **If anything looks wrong after updating**, open the launcher, go to PC Settings and turn on
-  **Compatibility mode**. It switches this patch's renderer speedups off. Then please tell us
+- **If anything looks wrong after updating**, open the launcher, go to PC Settings > Experimental
+  and turn on **Compatibility mode**. It switches this patch's renderer speedups off. Then please tell us
   (Report a Problem in the launcher makes a zip to attach to a GitHub issue).
 
 ## Updating from v0.1
@@ -51,9 +51,16 @@ now lives inside the folder you unzipped.
   (Scarface, Weapons and Gear, City Hunter, Alien Hunter, Ritual, Dark Blade and Bad Blood),
   one click each, checked against a known hash. Packs you already have can be switched on and off
   there.
+- **Portuguese (Brazil), experimental**: an **EN | PT** switch on the launcher's home page (Y on a
+  controller, L on the keyboard). The launcher switches straight away; for the game, get "Portuguese
+  (Brazil) translation" in Texture Packs once. Menus, objectives, loading tips and subtitles are
+  translated, with accented letters added to the game's fonts; voices stay English. Still English
+  for now: text the port adds itself (Quit Game, the in-game PC Settings pages) and words drawn into
+  images (the chapter title cards, OBJECTIVE:). Corrections welcome in a GitHub issue.
 - **Boss poise** (PC Settings > Experimental, off by default): a boss that takes a quick run of hits
   stops flinching for a few seconds, so it can't be stun-locked to death. It still takes the damage;
-  regular enemies keep the original hit reactions. Native renderer moved to the same page.
+  regular enemies keep the original hit reactions. Native renderer, Compatibility mode and Test
+  captures moved to the same page.
 - **Drag and drop mods onto the launcher** (issue #4): drop a texture pack for this port, or a PS2
   texture mod made for PCSX2 (a folder, zip, 7z or rar), on the launcher window. PS2 mods are
   converted into packs you can switch on and off: PS2 alpha fixed, each texture resized to the Xbox
@@ -64,7 +71,7 @@ now lives inside the folder you unzipped.
   packs are for your own use: don't share them, point people to the mod's page.
 - **Report a Problem** collects the game's logs into one zip in the install's `logs` folder. Logs
   never contain your Windows user name.
-- **Compatibility mode** and an optional **Native renderer (experimental)** toggle in PC Settings.
+- **Compatibility mode** and an optional **Native renderer** toggle (PC Settings > Experimental).
   The native renderer draws from the game's own Direct3D calls instead of its GPU command stream.
   It may run faster. It is off by default; turn it off again if anything looks wrong.
 - **Controller only** (PC Settings): the keyboard and mouse never control the game, so a click

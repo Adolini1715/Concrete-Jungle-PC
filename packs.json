@@ -77,6 +77,19 @@
       "urls": [
         "https://archive.org/download/pcj-scarface-hd-pack/pcj-bad-blood-hd.zip"
       ]
+    },
+    {
+      "id": "lang-pt-br",
+      "name": "Portuguese (Brazil) translation - experimental",
+      "about": "The game's text in Portuguese, with accented letters for its fonts. Switch with EN | PT on the home page",
+      "file": "pcj-lang-pt-br.zip",
+      "size": 474912,
+      "sha1": "8f79c5016165ffbe4479dbd28ccbefa4535adc20",
+      "unpack": "lang",
+      "marker": "pt-br/text.txt",
+      "urls": [
+        "https://archive.org/download/pcj-scarface-hd-pack/pcj-lang-pt-br.zip"
+      ]
     }
   ]
 }

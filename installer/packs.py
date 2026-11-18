@@ -37,7 +37,29 @@ def manifest():
 
 
 def installed(tex, p):
+    if p.get("unpack"):   # a pack unpacked next to the textures folder (a translation: lang/<name>/)
+        return os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(tex)), p["unpack"], p.get("marker", "")))
     return any(os.path.isfile(os.path.join(tex, d, p["file"])) for d in ("", "disabled"))
+
+
+def unpack(tex, p, zpath):
+    """Unpacks a pack with "unpack": "<folder>" into that folder next to textures (only files under
+    it; nothing outside), then removes the zip."""
+    import zipfile
+    out = os.path.dirname(os.path.abspath(tex))
+    top = os.path.normpath(os.path.join(out, p["unpack"]))
+    with zipfile.ZipFile(zpath) as z:
+        for n in z.namelist():
+            if n.endswith("/"):
+                continue
+            dst = os.path.normpath(os.path.join(out, n))
+            if not dst.startswith(top + os.sep):
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with z.open(n) as src, open(dst + ".part", "wb") as f:
+                f.write(src.read())
+            os.replace(dst + ".part", dst)
+    os.remove(zpath)
 
 
 def clean(s):
@@ -86,6 +108,8 @@ def main():
                     os.remove(part)
                     continue
                 os.replace(part, dst)
+                if p.get("unpack"):
+                    unpack(tex, p, dst)
                 print(f"DONE {pid}", flush=True)
                 return 0
             except Exception as e:   # noqa: BLE001  next link

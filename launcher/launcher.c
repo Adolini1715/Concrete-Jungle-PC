@@ -99,7 +99,7 @@ static const Setting S[] = {
     {"CJ_CONTROLLER_ONLY", "Controller only", "Keyboard and mouse don't control the game (no stray shots while taking screenshots).", 0, 1, 1, 0},
     {"CJ_CAM_MODERN", "Modern camera", "The camera stops when you let go of the stick.", 0, 1, 1, 1},
     {"CJ_GLOW_TRAILS", "Screen trails", "The original glow and blur lag behind the camera, leaving a ghost when it moves. Off removes the lag.", 0, 1, 1, 1},
-    {"CJ_LANG", "Language", "Text language. Portuguese reads the translation from the lang\\pt-br folder.", 0, 1, 1, 0},
+    {"CJ_LANG", "Language", "Portuguese (Brazil) text, downloaded in Texture Packs. Some screens stay in English.", 0, 1, 1, 0, 1},
     {"CJ_GLYPHS", "PC button prompts", "Keyboard or modern controller icons in game.", 0, 1, 1, 1},
     {"CJ_GL_SHADER_CACHE", "Shader cache", "Keeps compiled shaders so each one only stutters once.", 0, 1, 1, 1},
     {"CJ_SAFE_RENDER", "Compatibility mode", "Turns off this version's renderer speedups. Try it if anything looks wrong.", 0, 1, 1, 0, 1},
@@ -134,7 +134,8 @@ static const char *const k_pt[][2] = {
     {"Modern camera", "Câmera moderna"}, {"The camera stops when you let go of the stick.", "A câmera para quando você solta o analógico."},
     {"Screen trails", "Rastro na tela"}, {"The original glow and blur lag behind the camera, leaving a ghost when it moves. Off removes the lag.",
                                           "O brilho e o desfoque originais ficam atrás da câmera e deixam um fantasma quando ela se move. Desligado remove o atraso."},
-    {"Language", "Idioma"}, {"Text language. Portuguese reads the translation from the lang\\pt-br folder.", "Idioma dos textos. Português usa a tradução da pasta lang\\pt-br."},
+    {"Language", "Idioma"}, {"Portuguese (Brazil) text, downloaded in Texture Packs. Some screens stay in English.", "Textos em português (Brasil), baixados em Pacotes de texturas. Algumas telas continuam em inglês."},
+    {"Portuguese: get the translation in Texture Packs (experimental).%s", "Português: baixe a tradução em Pacotes de texturas (experimental).%s"},
     {"PC button prompts", "Botões de PC"}, {"Keyboard or modern controller icons in game.", "Ícones de teclado ou de controle moderno no jogo."},
     {"Shader cache", "Cache de shaders"}, {"Keeps compiled shaders so each one only stutters once.", "Guarda os shaders compilados para cada um travar só uma vez."},
     {"Compatibility mode", "Modo de compatibilidade"}, {"Turns off this version's renderer speedups. Try it if anything looks wrong.",
@@ -1244,6 +1245,11 @@ static void lang_toggle(void)
             s_val[li] = !s_val[li];
             s_ini_dirty = 1;
             ini_save();
+            if (s_val[li]) {   /* the translation is a download (Texture Packs) */
+                char p[1200];
+                snprintf(p, sizeof p, "%s" SEP "lang" SEP "pt-br" SEP "text.txt", s_dir);
+                if (!file_exists(p)) msg("Portuguese: get the translation in Texture Packs (experimental).%s", "");
+            }
             mclick = 0;
         }
     }
