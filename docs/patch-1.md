@@ -51,6 +51,9 @@ now lives inside the folder you unzipped.
   (Scarface, Weapons and Gear, City Hunter, Alien Hunter, Ritual, Dark Blade and Bad Blood),
   one click each, checked against a known hash. Packs you already have can be switched on and off
   there.
+- **Boss poise** (PC Settings > Experimental, off by default): a boss that takes a quick run of hits
+  stops flinching for a few seconds, so it can't be stun-locked to death. It still takes the damage;
+  regular enemies keep the original hit reactions. Native renderer moved to the same page.
 - **Drag and drop mods onto the launcher** (issue #4): drop a texture pack for this port, or a PS2
   texture mod made for PCSX2 (a folder, zip, 7z or rar), on the launcher window. PS2 mods are
   converted into packs you can switch on and off: PS2 alpha fixed, each texture resized to the Xbox
