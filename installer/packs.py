@@ -39,7 +39,12 @@ def manifest():
 def installed(tex, p):
     if p.get("unpack"):   # a pack unpacked next to the textures folder (a translation: lang/<name>/)
         return os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(tex)), p["unpack"], p.get("marker", "")))
-    return any(os.path.isfile(os.path.join(tex, d, p["file"])) for d in ("", "disabled"))
+    # a copy of another size is an older upload of the pack (it was fixed since): offer it again
+    for d in ("", "disabled"):
+        f = os.path.join(tex, d, p["file"])
+        if os.path.isfile(f) and (not p.get("size") or os.path.getsize(f) == int(p["size"])):
+            return True
+    return False
 
 
 def unpack(tex, p, zpath):
@@ -83,6 +88,8 @@ def main():
         p = packs[pid]
         os.makedirs(tex, exist_ok=True)
         dst = os.path.join(tex, p["file"])
+        if not os.path.isfile(dst) and os.path.isfile(os.path.join(tex, "disabled", p["file"])):
+            dst = os.path.join(tex, "disabled", p["file"])   # replacing a pack the player turned off: keep it off
         part = dst + ".part"
         why = "no download link"
         for url in p.get("urls", []):
