@@ -192,6 +192,9 @@ extern void *xbox_GetMemoryOffset(void);
 static const float k_gap = 2.0f;   /* source pixels between letters' ink */
 static float rdf(uint8_t *M, uint32_t a) { float f; memcpy(&f, M + a, 4); return f; }
 static void wrf(uint8_t *M, uint32_t a, float f) { memcpy(M + a, &f, 4); }
+extern int langfont_owns(uint32_t e);
+extern void langfont_apply(uint32_t page, float a_u0);
+extern void langfont_repair(uint32_t page);
 static int font_table_ok(uint8_t *M, uint32_t page)
 {
     /* Every glyph entry must be a small forward offset to an entry inside the font's own block
@@ -201,7 +204,7 @@ static int font_table_ok(uint8_t *M, uint32_t page)
     for (int c = 0; c < 256; c++) {
         uint32_t a = page + (uint32_t)c * 4u, o = MEM32(a);
         if (!o) continue;
-        if (o < 4u || a + o < page + 0x400u || o > 0x20000u || page < 0x80000000u) {
+        if ((o < 4u || a + o < page + 0x400u || o > 0x20000u || page < 0x80000000u) && !langfont_owns(a + o)) {
             static unsigned n_bad;
             if (n_bad++ < 4) fprintf(stderr, "[FONT] font table at %08X: entry %d offset %08X out of range; left as is\n", page, c, o);
             return 0;
@@ -283,8 +286,10 @@ static void fe_font_kern_(uint32_t self, float s)
     if (!po) return;
     uint32_t page = pg + po;
     /* (re)check on every call: a font freed and reloaded at the same address comes back unfixed */
+    langfont_repair(page);   /* before the table is checked: a copied font's stale letters */
     float au0 = fe_font_fix(page);
     if (au0 < 0.0f) return;
+    langfont_apply(page, au0);   /* a translation's accented letters (src/langfont.c) */
     int slot = -1;
     for (int i = 0; i < n; i++) if (seen[i].f == f) { slot = i; break; }
     const FontInk *fk = NULL;

@@ -89,7 +89,7 @@ option(CJ_DET_FILE "gen dir wraps FileThreadWakeUp (CJ_DET synchronous file I/O)
 # pointers, wrapping arithmetic, this == NULL checks. GCC and clang exploit the
 # UB differently, so turn those optimisations off for both.
 set_source_files_properties(${SWAP_SOURCES} PROPERTIES COMPILE_OPTIONS "-fno-strict-aliasing;-fwrapv;-fno-delete-null-pointer-checks")
-add_executable(pcj src/main.c src/recomp_manual.c src/determinism.c src/det_file.c src/femouse.c src/native_gfx.c src/native_dsound.c src/mods_archive.c src/cj_rec.c src/gl_backend.c src/frame_rec.c src/shader_cache.c src/viewer_mode.c src/gamelog.c src/async_io.c src/frame_pacer.c src/prof.c src/fast_emutls.c src/cj_pad.c src/texpack.c src/textpack.c src/glyphs.c src/keymap.c src/focusdiag.c src/pcsettings.c src/quicksave.c src/cutscene_ai.c ${SWAP_SOURCES} ${RECOMP_GEN_SOURCES})
+add_executable(pcj src/main.c src/recomp_manual.c src/determinism.c src/det_file.c src/femouse.c src/native_gfx.c src/native_dsound.c src/mods_archive.c src/cj_rec.c src/gl_backend.c src/frame_rec.c src/shader_cache.c src/viewer_mode.c src/gamelog.c src/async_io.c src/frame_pacer.c src/prof.c src/fast_emutls.c src/cj_pad.c src/texpack.c src/textpack.c src/langfont.c src/glyphs.c src/keymap.c src/focusdiag.c src/pcsettings.c src/quicksave.c src/cutscene_ai.c ${SWAP_SOURCES} ${RECOMP_GEN_SOURCES})
 target_compile_definitions(pcj PRIVATE _GNU_SOURCE)
 if(NOT CJ_DET_FILE)
   target_compile_definitions(pcj PRIVATE CJ_NO_FILE_WRAP)

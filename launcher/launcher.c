@@ -99,6 +99,7 @@ static const Setting S[] = {
     {"CJ_CONTROLLER_ONLY", "Controller only", "Keyboard and mouse don't control the game (no stray shots while taking screenshots).", 0, 1, 1, 0},
     {"CJ_CAM_MODERN", "Modern camera", "The camera stops when you let go of the stick.", 0, 1, 1, 1},
     {"CJ_GLOW_TRAILS", "Screen trails", "The original glow and blur lag behind the camera, leaving a ghost when it moves. Off removes the lag.", 0, 1, 1, 1},
+    {"CJ_LANG", "Language", "Text language. Portuguese reads the translation from the lang\\pt-br folder.", 0, 1, 1, 0},
     {"CJ_GLYPHS", "PC button prompts", "Keyboard or modern controller icons in game.", 0, 1, 1, 1},
     {"CJ_GL_SHADER_CACHE", "Shader cache", "Keeps compiled shaders so each one only stutters once.", 0, 1, 1, 1},
     {"CJ_SAFE_RENDER", "Compatibility mode", "Turns off this version's renderer speedups. Try it if anything looks wrong.", 0, 1, 1, 0},
@@ -1042,6 +1043,7 @@ static int rows(const Row *r, int n, float x, float y, float dy, Font *f, float 
 static const char *val_str(int i)
 {
     static char b[32];
+    if (!strcmp(S[i].key, "CJ_LANG")) return s_val[i] ? "Portugues (Brasil)" : "English";
     if (S[i].lo == 0 && S[i].hi == 1) return s_val[i] ? "On" : "Off";
     if (!strcmp(S[i].key, "CJ_GL_SCALE")) {
         static const char *r[] = {"", "1x  (640x480)", "2x  (1280x960)", "3x  (1440p)", "4x  (2560x1920)", "5x  (4K)"};

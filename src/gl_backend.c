@@ -2397,12 +2397,16 @@ static int texpack_upload(const Nv2aTexture *t)
     size_t n;
     uint64_t key;
     int rw, rh;
-    if (!texpack_active() || t->cube || texpack_skip_format(t->color)) return 0;
+    extern int langfont_active(void);
+    extern const uint8_t *langfont_atlas(uint64_t key, int *w, int *h);
+    int lang = langfont_active();
+    if ((!texpack_active() && !lang) || t->cube || texpack_skip_format(t->color)) return 0;
     l0.levels = 1;
     n = tex_span(&l0);
     if (!n || a >= g_xbox_contig_size || n > g_xbox_contig_size - a) return 0;
     key = texpack_key(mem + t->offset, n, t->color, t->width, t->height);
-    if ((rgba = texpack_find(key, &rw, &rh))) {
+    /* a translation's fonts (src/langfont.c) win over packs and stay on when packs are off */
+    if ((lang && (rgba = langfont_atlas(key, &rw, &rh))) || (texpack_active() && (rgba = texpack_find(key, &rw, &rh)))) {
         uint32_t d = (uint32_t)(rw > rh ? rw : rh), nl = 1;
         while (d > 1) { d >>= 1; nl++; }
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -2414,6 +2418,7 @@ static int texpack_upload(const Nv2aTexture *t)
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         return 1;
     }
+    if (!texpack_active()) return 0;
     if (texpack_pending(key)) s_tp_pend = key;   /* the original for now; decode_bind swaps the replacement in */
     if (texpack_want_dump(key)) {
         uint32_t *px = malloc((size_t)t->width * t->height * 4);
