@@ -105,6 +105,7 @@ static const Setting S[] = {
     {"CJ_SAFE_RENDER", "Compatibility mode", "Turns off this version's renderer speedups. Try it if anything looks wrong.", 0, 1, 1, 0, 1},
     {"CJ_API_TAKEOVER", "Native renderer", "May run faster. Draws from the game's own calls. Turn off if anything looks wrong.", 0, 1, 1, 0, 1},
     {"CJ_BOSS_POISE", "Boss poise", "Bosses stop flinching for a few seconds after a quick run of hits, so they can't be stun-locked.", 0, 1, 1, 0, 1},
+    {"CJ_JUMP_BUFFER", "Jump buffer", "A jump pressed in the air carries into the landing: held, it starts the charge; tapped just before, it jumps again.", 0, 1, 1, 0, 1},
     {"CJ_TEST_CAPTURE", "Test captures", "Records 3 short frame captures per session for bug reports.", 0, 1, 1, 0, 1},
 };
 #define NS ((int)(sizeof S / sizeof S[0]))
@@ -144,6 +145,8 @@ static const char *const k_pt[][2] = {
                                                   "Pode rodar mais rápido. Desenha a partir das chamadas do próprio jogo. Desligue se algo parecer errado."},
     {"Boss poise", "Postura dos chefes"}, {"Bosses stop flinching for a few seconds after a quick run of hits, so they can't be stun-locked.",
                                            "Chefes param de recuar por alguns segundos após uma sequência rápida de golpes, para não ficarem presos atordoados."},
+    {"Jump buffer", "Buffer de pulo"}, {"A jump pressed in the air carries into the landing: held, it starts the charge; tapped just before, it jumps again.",
+                                        "Um pulo apertado no ar continua na aterrissagem: segurado, começa a carga; tocado logo antes, pula de novo."},
     {"Test captures", "Capturas de teste"}, {"Records 3 short frame captures per session for bug reports.", "Grava 3 capturas curtas por sessão para relatórios de erros."},
     {"Apply Steam Deck preset", "Aplicar predefinição do Steam Deck"}, {"Steam Deck preset applied.%s", "Predefinição do Steam Deck aplicada.%s"},
     {"60 fps, 2x, fullscreen, V-Sync, controller prompts, regular renderer.", "60 fps, 2x, tela cheia, V-Sync, botões de controle, renderizador normal."},

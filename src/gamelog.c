@@ -280,7 +280,7 @@ static void write_session(const char *gl_vendor, const char *gl_renderer, const 
         static const char *keys[] = {"CJ_GL", "CJ_GL_VSH", "CJ_WINDOW_SCALE", "CJ_FULLSCREEN", "CJ_VSYNC", "CJ_MOVIE_AUDIO",
                                      "CJ_AUDIO_XA2", "CJ_NATIVE_SWAP", "CJ_GL_WBUF", "CJ_GL_ANISO", "CJ_GL_LOD_BIAS",
                                      "CJ_GAMELOG_SHOT_EVERY", "CJ_API_TAKEOVER", "CJ_API_VERIFY", "CJ_GL_RING", "CJ_FPS",
-                                     "CJ_CHARGE_FIX", "CJ_BOSS_POISE", "CJ_LANG", "CJ_TEST_CAPTURE", "CJ_GL_PERSIST", "CJ_PERF_TEST", NULL};
+                                     "CJ_CHARGE_FIX", "CJ_BOSS_POISE", "CJ_JUMP_BUFFER", "CJ_LANG", "CJ_TEST_CAPTURE", "CJ_GL_PERSIST", "CJ_PERF_TEST", NULL};
         int i;
         {   const char *t = getenv("CJ_API_TAKEOVER");
             fprintf(f, "renderer: %s\n", t && *t == '1' ? "native (draws from the game's own D3D calls)" : "regular (emulated GPU)");

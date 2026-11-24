@@ -557,14 +557,19 @@ static void boss_poise_tick(uint8_t *mem)
  *  - released before touchdown but pressed within CJ_JUMP_BUFFER_MS (default 150) of it: a plain
  *    jump, queued for 300 ms after touchdown.
  * Holding the button from take-off (the higher jump) queues nothing: only a new press in the air
- * counts. CJ_JUMP_BUFFER_MS=0 turns the buffer off. */
+ * counts. Off by default: CJ_JUMP_BUFFER=1 turns it on (launcher: PC Settings > Experimental). */
 static uint64_t s_air_press_ns;   /* last fresh jump press while airborne (0: none this jump) */
 static int s_jb;                  /* 0 nothing queued, 1 held, 2 tap */
 static uint64_t s_jb_ns;          /* touchdown time of the queued jump */
 static int jb_ms(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("CJ_JUMP_BUFFER_MS"); v = e && *e ? atoi(e) : 150; if (v < 0 || v > 1000) v = 150; }
+    if (v == -2) {
+        const char *on = getenv("CJ_JUMP_BUFFER"), *e = getenv("CJ_JUMP_BUFFER_MS");
+        v = e && *e ? atoi(e) : 150;
+        if (v < 0 || v > 1000) v = 150;
+        if (!on || atoi(on) != 1) v = 0;   /* off unless turned on (launcher: PC Settings > Experimental) */
+    }
     return v;
 }
 static int jb_hold_ms(void)

@@ -108,12 +108,12 @@ Yautja are large but agile and acrobatic: weight, never sluggish. No land roll (
   - Stick and jump pressed together from a standstill no longer give the instant small hop. The run's
     first frames have no speed yet (m_MSpeedTarget < 0.01), and CheckForJump took the standstill
     hop there; modern movement starts the running charge instead (a tap still jumps at once).
-  - Jump buffer: a jump pressed in the air carries into the landing (cjmod_jump_buffer_*). Still
+  - Jump buffer (opt-in since v0.2.2: CJ_JUMP_BUFFER=1, launcher PC Settings > Experimental): a jump pressed in the air carries into the landing (cjmod_jump_buffer_*). Still
     held at touchdown: the landing starts the charge, timed from touchdown (running charge when
     moving, the standing one otherwise), kept for up to CJ_JUMP_BUFFER_HOLD_MS (1000) while the
     landing animation plays. Pressed within CJ_JUMP_BUFFER_MS (150) of touchdown and let go: a
     plain jump right after the landing. Holding jump from take-off queues nothing; only a new
-    press in the air counts. CJ_JUMP_BUFFER_MS=0 turns it off.
+    press in the air counts. CJ_JUMP_BUFFER_MS sets the tap window.
   - Tested with timed pad sequences (CJ_PAD_LIVE lines take @<delay>; CJ_MOVE_TRACE logs every
     mode change): the instant hop is gone, both buffer cases jump 2 frames after touchdown, a press
     400 ms before touchdown is still ignored, standing landings unchanged.

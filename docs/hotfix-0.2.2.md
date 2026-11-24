@@ -1,6 +1,6 @@
 # Hotfix v0.2.2
 
-Two fixes on top of v0.2.1.
+Two fixes and one new experimental option on top of v0.2.1.
 
 ## Fixes
 
@@ -14,12 +14,16 @@ Two fixes on top of v0.2.1.
     install folder, then run `Install.bat`. Your saves, settings and texture packs are kept
     either way. Updates after this one use the fixed updater.
 - **Jumping (modern controls).** From [issue #6](https://github.com/Adolini1715/Concrete-Jungle-PC/issues/6):
-  - Pressing a direction and jump together sometimes gave a tiny instant hop instead of
-    starting the charge. It now always starts the charge (a quick tap still jumps right away).
-  - A jump pressed in the air is no longer lost when you land. Still holding it as you touch
-    down goes straight into the charge (keeping your momentum when moving); a tap just before
-    landing jumps again right after. Holding jump from take-off does not count, so the higher
-    jump never turns into an extra hop. `CJ_JUMP_BUFFER_MS=0` in `pcj.ini` turns this off.
+  pressing a direction and jump together sometimes gave a tiny instant hop instead of starting
+  the charge. It now always starts the charge (a quick tap still jumps right away).
+
+## New experimental option
+
+- **Jump buffer** (PC Settings > Experimental, off by default). A jump pressed in the air is no
+  longer lost when you land: still holding it as you touch down goes straight into the charge
+  (keeping your momentum when moving), and a tap just before landing jumps again right after.
+  Holding jump from take-off does not count, so the higher jump never turns into an extra hop.
+  Try it and tell us how it feels.
 
 ## Updating
 
