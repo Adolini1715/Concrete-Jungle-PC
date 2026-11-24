@@ -110,7 +110,7 @@ def main():
                     continue
                 shutil.copy2(os.path.join(d, f), os.path.join(REPO, rel_d, f))
                 n += 1
-        # Update.bat runs from a temporary copy, so the new one can be written now
+        # Update.bat has already read its whole block, so the new one can be written now
         ub = os.path.join(new, "Update.bat")
         if os.path.isfile(ub):
             shutil.copy2(ub, os.path.join(REPO, "Update.bat"))
