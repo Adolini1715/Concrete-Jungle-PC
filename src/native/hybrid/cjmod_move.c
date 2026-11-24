@@ -325,6 +325,18 @@ static void charge_reset_tick(uint8_t *mem, uint32_t h)
         }
         if (*mode != 2 && *mode != 3) crouch_frames = 0;
     }
+    {   /* CJ_MOVE_TRACE: every mode change with the jump button and stick (movement tests) */
+        static int tr = -1; static uint32_t pm = ~0u, ps = ~0u; static unsigned long n;
+        uint32_t sub = *(volatile uint32_t *)(mem + h + 0x210);
+        if (tr < 0) tr = getenv("CJ_MOVE_TRACE") != NULL;
+        n++;
+        if (tr && (*mode != pm || sub != ps)) {
+            fprintf(stderr, "[MOVE] t%lu mode %u.%u jump %d%d stick %.2f speed %.3f charge %.2f\n", n, *mode, sub,
+                    (*(volatile uint32_t *)(mem + h + 0xf0) & 0x20) != 0, (*(volatile uint32_t *)(mem + h + 0xf4) & 0x20) != 0,
+                    *(volatile float *)(mem + h + 0xdc), *(volatile float *)(mem + h + 0x2f8), *timer);
+            pm = *mode; ps = sub;
+        }
+    }
     if (*mode != 2) s_committed = 0;
     if (!on || *mode == 2 || cjmod_run_charging()) return;
     if (*timer != 0.0f) {
@@ -533,4 +545,65 @@ static void boss_poise_tick(uint8_t *mem)
             gamelog_event("boss_poise", "\"actor\":%u,\"on\":1,\"hp\":%.0f", i, *(volatile float *)(mem + a + 0x7DC));
         }
     }
+}
+
+/* Jump buffer (modern movement; GitHub issue #6, 2026-11-20). A jump pressed in the air was lost:
+ * the run reads only a fresh press (the frame the button goes down), and landings while moving go
+ * straight into the run, so holding a press made before touchdown did nothing. Now a press made
+ * during the jump or fall carries into the landing:
+ *  - still held at touchdown: the landing starts the charge (the running charge when moving, the
+ *    standing one otherwise), timed from touchdown; it stays queued while the button is held, up to
+ *    CJ_JUMP_BUFFER_HOLD_MS (default 1000) after touchdown, so a landing animation cannot eat it;
+ *  - released before touchdown but pressed within CJ_JUMP_BUFFER_MS (default 150) of it: a plain
+ *    jump, queued for 300 ms after touchdown.
+ * Holding the button from take-off (the higher jump) queues nothing: only a new press in the air
+ * counts. CJ_JUMP_BUFFER_MS=0 turns the buffer off. */
+static uint64_t s_air_press_ns;   /* last fresh jump press while airborne (0: none this jump) */
+static int s_jb;                  /* 0 nothing queued, 1 held, 2 tap */
+static uint64_t s_jb_ns;          /* touchdown time of the queued jump */
+static int jb_ms(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("CJ_JUMP_BUFFER_MS"); v = e && *e ? atoi(e) : 150; if (v < 0 || v > 1000) v = 150; }
+    return v;
+}
+static int jb_hold_ms(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("CJ_JUMP_BUFFER_HOLD_MS"); v = e && *e ? atoi(e) : 1000; if (v < 0 || v > 5000) v = 1000; }
+    return v;
+}
+void cjmod_air_jump_note(int fresh_press)
+{
+    if (!cjmod_move_modern() || !jb_ms()) return;
+    if (fresh_press) s_air_press_ns = xbox_HostNowNs();
+}
+void cjmod_jump_buffer_land(int held)
+{
+    uint64_t now = xbox_HostNowNs();
+    s_jb = 0;
+    if (cjmod_move_modern() && jb_ms() && s_air_press_ns) {
+        if (held) s_jb = 1;
+        else if (now - s_air_press_ns <= (uint64_t)jb_ms() * 1000000ull) s_jb = 2;
+        s_jb_ns = now;
+        if (s_jb) {
+            static int lg = -1;
+            if (lg < 0) lg = getenv("CJ_MOVE_TRACE") != NULL;
+            if (lg) fprintf(stderr, "[MOVE] jump buffered at landing: %s (pressed %.0f ms before)\n", s_jb == 1 ? "held" : "tap",
+                            (double)(now - s_air_press_ns) / 1e6);
+        }
+    }
+    s_air_press_ns = 0;
+}
+/* a queued jump for this frame (held: the jump button is down now); consumed when returned */
+int cjmod_jump_buffer_take(int held)
+{
+    uint64_t age;
+    if (!s_jb) return 0;
+    age = xbox_HostNowNs() - s_jb_ns;
+    if (s_jb == 1 && !held) s_jb = 2;   /* let go before the landing animation was over: a plain jump */
+    if (s_jb == 1 && age > (uint64_t)jb_hold_ms() * 1000000ull) { s_jb = 0; return 0; }
+    if (s_jb == 2 && age > 300000000ull) { s_jb = 0; return 0; }
+    s_jb = 0;
+    return 1;
 }

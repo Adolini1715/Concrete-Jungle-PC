@@ -18,7 +18,7 @@
  *     Buttons: up down left right start back lthumb rthumb a b x y black white
  *     lt rt, lleft lright lup ldown rleft rright rup rdown.
  *   CJ_PAD_REPEAT=<btn>,<period>,<hold>  pulse a button forever (after the script).
- *   CJ_PAD_LIVE=<file>  lines <btn>[+<btn>..][:<hold>] appended at run time are
+ *   CJ_PAD_LIVE=<file>  lines <btn>[+<btn>..][:<hold>][@<delay>] appended at run time are
  *     pressed at the next poll.
  *   CJ_PAD_REPLAY=<input.csv>  replay a controller recording from the xemu
  *     recorder (tools/xemu_soak): XInput buttons, triggers and sticks, pad 0,
@@ -251,8 +251,12 @@ static void live_read(void)
         if (line[0] == '\n' || line[0] == '#') continue;
         if (!strncmp(line, "stop", 4)) { s_rep_period = 0; fprintf(stderr, "[PAD] live: repeat off\n"); continue; }
         st.hold = s_ms ? 150 : 4;
-        parse_btns(line, &st);
-        st.at = tnow();
+        {   /* <btns>[:<hold>][@<delay>]: start <delay> polls (or ms) from now, so a test can write a
+             * whole timed sequence at once */
+            const char *q = parse_btns(line, &st);
+            st.at = tnow();
+            if (*q == '@') st.at += strtoul(q + 1, NULL, 0);
+        }
         if (s_n < MAXSTEP) s_step[s_n++] = st;
         fprintf(stderr, "[PAD] live: %s", line);
     }

@@ -49,6 +49,9 @@ extern "C" float cjmod_turn_mult(void);
 extern "C" float cjmod_turn_cost(void);
 extern "C" float cjmod_air_push(void);
 extern "C" float cjmod_stop_frac(void);
+extern "C" void cjmod_air_jump_note(int fresh_press);
+extern "C" void cjmod_jump_buffer_land(int held);
+extern "C" int cjmod_jump_buffer_take(int held);
 
 // MOD 00165450
 signed char XItemHandler_Player::MoveNormal(int flags)
@@ -215,6 +218,10 @@ void XItemHandler_Player::DoIdle()
         m_IdleTime = 0.0f;
         return;
     }
+    if (cjmod_move_modern() && (m_PredMsgFlags & 0x20) && !m_HoldState && cjmod_jump_buffer_take((m_ButtonsPressed & 0x20) != 0)) {
+        SetupMove(2, 0, -1.0f);   // a jump pressed in the air, queued at the landing: the charge (a tap launches at once)
+        return;
+    }
     if (CheckForIdleBreakOut(6)) return;
     if ((m_SubMode == 9 || m_SubMode == 10) && cjmod_move_modern() &&
         ((EXItemAnimator_Anim *)m_pItem->GetAnimator(EXRUNTIME_CLASS(EXItemAnimator_Anim)))->Controller(0)->Frame() > cjmod_stop_frac()) {
@@ -292,13 +299,16 @@ signed char XItemHandler_Player::CheckForJump(signed char b)
         DeleteAllSwoosh();
         return 1;
     }
-    if ((m_PredMsgFlags & 0x20) && (m_ButtonsHeld & 0x20)) {
+    // modern: a jump pressed in the air and queued at the landing (cjmod_jump_buffer_take) counts as a fresh press
+    if ((m_PredMsgFlags & 0x20) && ((m_ButtonsHeld & 0x20) || (b && cjmod_move_modern() && cjmod_jump_buffer_take((m_ButtonsPressed & 0x20) != 0)))) {
         XItemPhysics *pPhys = (XItemPhysics *)m_pItem->m_pItemPhysics;
         if (m_PredMsgFlags & 0x10) {
             m_JumpBaseY = m_pItem->Position().y;
             m_Unk344 = 12.0f;
         }
-        if (m_MSpeedTarget < 0.01f) {
+        if (m_MSpeedTarget < 0.01f && !(b && cjmod_move_modern())) {
+            // (modern: not on the run's first frames, when the stick and jump went down together and the
+            // run has no speed yet: that took this instant hop instead of the charge, issue #6)
             pPhys->SetThrustToAttainHeight(3.217f);
             SetupMove(3, 0, -1.0f);
         } else if (b && cjmod_move_modern()) {
@@ -403,6 +413,7 @@ void XItemHandler_Player::CheckForLand()
 {
     XItemPhysics *pPhys = (XItemPhysics *)m_pItem->m_pItemPhysics;
     if (!(pPhys->m_collisionFlags & 1)) return;
+    cjmod_jump_buffer_land((m_ButtonsPressed & 0x20) != 0);   // modern: a jump pressed in the air carries into the landing
     float speed = 1.0f;
     if (0.18f > m_MSpeedTarget) speed = 0.9f;
     if (0.09f > m_MSpeedTarget) speed = 0.45f;
@@ -757,6 +768,7 @@ void XItemHandler_Player::DoJump()
         }
     }
     MoveJump();
+    cjmod_air_jump_note((m_ButtonsHeld & 0x20) != 0);   // modern: fresh jump presses in the air (the jump buffer)
 
     if (m_bJumpTarget) {
         const EXVector &pp = m_pItem->Position();

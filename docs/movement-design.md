@@ -104,6 +104,19 @@ Yautja are large but agile and acrobatic: weight, never sluggish. No land roll (
     the run target (cjmod_run_remap) so InertiaToRunSpeed stays the original: replacing it in C
     broke recordings, because the original's x87 result feeds the movement unrounded.
   - Air control x2.5 (CJ_AIR_CONTROL 250, MoveJump's 0.015 per-frame push).
+- Jump fixes (GitHub issue #6, 2026-11-20):
+  - Stick and jump pressed together from a standstill no longer give the instant small hop. The run's
+    first frames have no speed yet (m_MSpeedTarget < 0.01), and CheckForJump took the standstill
+    hop there; modern movement starts the running charge instead (a tap still jumps at once).
+  - Jump buffer: a jump pressed in the air carries into the landing (cjmod_jump_buffer_*). Still
+    held at touchdown: the landing starts the charge, timed from touchdown (running charge when
+    moving, the standing one otherwise), kept for up to CJ_JUMP_BUFFER_HOLD_MS (1000) while the
+    landing animation plays. Pressed within CJ_JUMP_BUFFER_MS (150) of touchdown and let go: a
+    plain jump right after the landing. Holding jump from take-off queues nothing; only a new
+    press in the air counts. CJ_JUMP_BUFFER_MS=0 turns it off.
+  - Tested with timed pad sequences (CJ_PAD_LIVE lines take @<delay>; CJ_MOVE_TRACE logs every
+    mode change): the instant hop is gone, both buffer cases jump 2 frames after touchdown, a press
+    400 ms before touchdown is still ignored, standing landings unchanged.
 - Turn-and-flip (2026-10-29): tried (a jump after reversing the stick while running played the lock-on forward flip) and removed 2026-10-30; it did not feel right in play.
 
 ## Decisions (2026-10-27)
